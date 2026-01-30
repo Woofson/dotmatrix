@@ -27,6 +27,17 @@ Most dotfile managers use symlinks, which can be fragile and confusing. dotmatri
 
 No broken symlinks. No complicated stow configurations. Just simple, reliable dotfile management.
 
+### Track files anywhere
+
+dotmatrix isn't limited to your home directory - track configuration files from anywhere on your system:
+
+- User dotfiles: `~/.bashrc`, `~/.config/*`
+- System configs: `/etc/nginx/nginx.conf`, `/etc/ssh/sshd_config`
+- Application configs: `/opt/myapp/config.yml`
+- Any readable file on your system
+
+As long as you have read access, dotmatrix can track it. Perfect for system administrators managing server configurations or developers tracking multiple config locations.
+
 ## Installation
 
 ### From source
@@ -75,11 +86,17 @@ dotmatrix uses `~/.config/dotmatrix/config.toml`:
 git_enabled = true
 
 tracked_files = [
+    # User dotfiles
     "~/.bashrc",
     "~/.zshrc",
     "~/.gitconfig",
     "~/.config/nvim/**",
     "~/.config/alacritty/**",
+    
+    # System configurations (requires read access)
+    "/etc/nginx/nginx.conf",
+    "/etc/ssh/sshd_config",
+    "/etc/fstab",
 ]
 
 exclude = [
@@ -111,10 +128,11 @@ exclude = [
 Initialize dotmatrix with default configuration and create necessary directories.
 
 ### `dotmatrix add <patterns>`
-Add file patterns to tracking list.
+Add file patterns to tracking list. Works with any readable file on the system.
 
 ```bash
 dotmatrix add ~/.vimrc ~/.config/fish/**
+dotmatrix add /etc/nginx/nginx.conf /etc/hosts
 ```
 
 ### `dotmatrix scan`
@@ -202,7 +220,7 @@ MIT License - See LICENSE file for details
 
 ## Author
 
-Woofson
+[Woofson](https://github.com/Woofson)
 
 ---
 
