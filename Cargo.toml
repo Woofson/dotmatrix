@@ -2,7 +2,7 @@
 name = "dotmatrix"
 version = "0.1.0"
 edition = "2021"
-authors = ["Woofson <dev@boop.no>"]
+authors = ["Woofson <https://github.com/Woofson>"]
 description = "Dotfile management and versioning tool"
 
 [dependencies]

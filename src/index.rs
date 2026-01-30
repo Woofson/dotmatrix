@@ -57,3 +57,9 @@ impl Index {
         self.files.get(path)
     }
 }
+
+impl Default for Index {
+    fn default() -> Self {
+        Self::new()
+    }
+}

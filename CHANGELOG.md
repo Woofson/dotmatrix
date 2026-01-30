@@ -9,6 +9,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Project Inception - 2026-01-30
 
+#### Session 1: Project Setup (Morning)
+Initial project structure and scaffolding - see details below in "Added" section.
+
+#### Session 2: File Scanning Implementation (Afternoon)
+
+**What we built:**
+Implemented complete file scanning functionality in `src/scanner.rs`:
+
+1. **Path Expansion** (`expand_tilde` function):
+   - Converts `~/` paths to absolute paths using user's home directory
+   - Handles both tilde and absolute paths correctly
+
+2. **Exclude Pattern Matching** (`is_excluded` function):
+   - Uses glob patterns to filter out unwanted files
+   - Supports patterns like `**/*.log`, `**/.DS_Store`, etc.
+   - Expands tildes in exclude patterns too
+
+3. **File Hashing** (`hash_file` function):
+   - Calculates SHA256 hash of file contents
+   - Uses 8KB buffer for efficient reading of large files
+   - Returns hex-encoded hash string
+
+4. **File Metadata** (`scan_file` function):
+   - Creates `FileEntry` with path, hash, size, and mtime
+   - Handles metadata extraction from filesystem
+   - Proper error context for debugging
+
+5. **Pattern Scanning** (`scan_pattern` and `scan_patterns` functions):
+   - Supports glob patterns (`~/.config/**`, `/etc/*.conf`)
+   - Handles literal paths (no glob characters)
+   - Distinguishes between files and directories
+   - Deduplicates results from overlapping patterns
+   - Collects errors without failing entire scan
+
+**Commands implemented:**
+- ✅ `add` - Add file patterns to config
+- ✅ `remove` - Remove patterns from config  
+- ✅ `scan` - Full implementation with:
+  - Pattern matching and file discovery
+  - Hash calculation for all files
+  - Index updates (new/updated/unchanged detection)
+  - Beautiful progress output with status indicators
+  - Summary statistics
+  - Graceful error handling
+
+**User Experience improvements:**
+- Added emoji indicators (✓, ❌, ⚠️, 🎬, 📋, 🚫, 📊)
+- Clear status messages (NEW, UPDATED, unchanged)
+- Helpful next-step suggestions
+- Graceful error messages with context
+
+**Testing considerations:**
+- Added basic unit tests in `scanner.rs`
+- Need to add integration tests when you have Rust installed
+- Test with various file types, permissions, patterns
+
+**What's next:**
+The `backup` command is the logical next step. It will:
+1. Run a scan (or use existing index)
+2. Copy files to storage (content-addressed by hash)
+3. Optionally commit to git
+4. Show backup summary
+
 #### Added
 - Initial project structure and scaffolding
 - Basic CLI interface using `clap` with command skeleton:
@@ -89,19 +152,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ✅ Index file management (load/save)
 - ✅ `init` command (creates directories and default config)
 - ✅ `list` command (shows tracked files from config)
+- ✅ `add` command (adds patterns to config)
+- ✅ `remove` command (removes patterns from config)
 - ✅ XDG directory helpers
+- ✅ **File scanning module (`src/scanner.rs`)**:
+  - ✅ Path expansion (`~` → `/home/user`)
+  - ✅ Glob pattern matching support
+  - ✅ SHA256 file hashing
+  - ✅ File metadata reading (size, mtime)
+  - ✅ Exclude pattern filtering
+  - ✅ Permission error handling
+  - ✅ Multi-pattern scanning
+- ✅ **`scan` command fully implemented**:
+  - ✅ Finds files matching patterns
+  - ✅ Calculates hashes for all files
+  - ✅ Updates index with file metadata
+  - ✅ Shows NEW/UPDATED/unchanged status
+  - ✅ Displays scan summary
+  - ✅ Handles errors gracefully
 
 **TODO** (In Priority Order):
-- [ ] File scanning implementation
-  - [ ] Expand `~` and glob patterns
-  - [ ] Read file metadata (size, mtime)
-  - [ ] Calculate SHA256 hash
-  - [ ] Handle read permission errors gracefully
-  - [ ] Respect exclude patterns
-- [ ] `scan` command
-  - [ ] Scan all tracked files
-  - [ ] Update index with current state
-  - [ ] Show summary of changes
+- [x] File scanning implementation
+  - [x] Expand `~` and glob patterns
+  - [x] Read file metadata (size, mtime)
+  - [x] Calculate SHA256 hash
+  - [x] Handle read permission errors gracefully
+  - [x] Respect exclude patterns
+- [x] `scan` command
+  - [x] Scan all tracked files
+  - [x] Update index with current state
+  - [x] Show summary of changes
 - [ ] `backup` command
   - [ ] Copy files to storage (content-addressed by hash)
   - [ ] Update index

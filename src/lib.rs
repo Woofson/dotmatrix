@@ -1,5 +1,6 @@
 pub mod config;
 pub mod index;
+pub mod scanner;
 
 use std::path::PathBuf;
 
