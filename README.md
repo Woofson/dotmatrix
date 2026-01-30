@@ -32,7 +32,7 @@ No broken symlinks. No complicated stow configurations. Just simple, reliable do
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/dotmatrix.git
+git clone https://github.com/Woofson/dotmatrix.git
 cd dotmatrix
 cargo build --release
 cargo install --path .
