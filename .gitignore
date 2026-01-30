@@ -1,0 +1,40 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Testing
+*.profraw
+*.profdata
+
+# Documentation
+/doc/
+
+# Backup files
+*.bak
+*.tmp
+
+# OS specific
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Project specific
+/test-data/
+/local/
