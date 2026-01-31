@@ -30,7 +30,12 @@ pub fn get_index_path() -> anyhow::Result<PathBuf> {
     Ok(get_data_dir()?.join("index.json"))
 }
 
-/// Get the storage directory path
+/// Get the storage directory path (for incremental/content-addressed backups)
 pub fn get_storage_path() -> anyhow::Result<PathBuf> {
     Ok(get_data_dir()?.join("storage"))
+}
+
+/// Get the archives directory path (for tarball backups)
+pub fn get_archives_path() -> anyhow::Result<PathBuf> {
+    Ok(get_data_dir()?.join("archives"))
 }

@@ -1,4 +1,4 @@
-# 🎬 dotmatrix
+# dotmatrix
 
 > *"I'm a Mog: half man, half dog. I'm my own best friend!"* - Barf, Spaceballs
 
@@ -13,54 +13,32 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 - **Git-based versioning**: Full history of your dotfiles with commit messages
 - **Pattern matching**: Track entire directories or specific file patterns
 - **Exclude lists**: Ignore temporary files, logs, and other cruft
-- **Fast backup & restore**: Quick snapshots of your system configuration
+- **Two backup modes**: Incremental (content-addressed) or archive (tarballs)
+- **Safety-first restore**: Comparison view, diffs, and automatic safety backups
 - **CLI first**: Power user friendly with clean command structure
-- **TUI planned**: Easy visual management coming soon
-
-## Why dotmatrix?
-
-Most dotfile managers use symlinks, which can be fragile and confusing. dotmatrix takes a different approach:
-
-1. **Index** your dotfiles where they naturally live
-2. **Backup** copies to versioned storage when you want
-3. **Restore** from any point in history
-
-No broken symlinks. No complicated stow configurations. Just simple, reliable dotfile management.
-
-### Track files anywhere
-
-dotmatrix isn't limited to your home directory - track configuration files from anywhere on your system:
-
-- User dotfiles: `~/.bashrc`, `~/.config/*`
-- System configs: `/etc/nginx/nginx.conf`, `/etc/ssh/sshd_config`
-- Application configs: `/opt/myapp/config.yml`
-- Any readable file on your system
-
-As long as you have read access, dotmatrix can track it. Perfect for system administrators managing server configurations or developers tracking multiple config locations.
 
 ## Installation
-
-### From source
 
 ```bash
 git clone https://github.com/Woofson/dotmatrix.git
 cd dotmatrix
-cargo build --release
-cargo install --path .
+make install
 ```
 
-### Binary (coming soon)
+Or with cargo directly:
 
-Pre-built binaries will be available for Linux, macOS, and Windows.
+```bash
+cargo install --path .
+```
 
 ## Quick Start
 
 ```bash
-# Initialize dotmatrix
+# Initialize dotmatrix (sets up directories and git)
 dotmatrix init
 
-# Edit your config to add files to track
-$EDITOR ~/.config/dotmatrix/config.toml
+# Add files to track
+dotmatrix add ~/.bashrc ~/.config/nvim/**
 
 # Scan and index your dotfiles
 dotmatrix scan
@@ -68,155 +46,111 @@ dotmatrix scan
 # Create a backup
 dotmatrix backup -m "Initial backup"
 
-# List tracked files
-dotmatrix list
-
-# Check status of changes
+# Check what changed
 dotmatrix status
 
-# Restore from backup
+# Restore from backup (with safety prompts)
 dotmatrix restore
 ```
 
 ## Configuration
 
-dotmatrix uses `~/.config/dotmatrix/config.toml`:
+Edit `~/.config/dotmatrix/config.toml`:
 
 ```toml
 git_enabled = true
+backup_mode = "incremental"  # or "archive"
 
 tracked_files = [
-    # User dotfiles
     "~/.bashrc",
     "~/.zshrc",
     "~/.gitconfig",
     "~/.config/nvim/**",
-    "~/.config/alacritty/**",
-    
-    # System configurations (requires read access)
-    "/etc/nginx/nginx.conf",
-    "/etc/ssh/sshd_config",
-    "/etc/fstab",
 ]
 
 exclude = [
     "**/*.log",
     "**/.DS_Store",
     "**/node_modules/**",
-    "**/__pycache__/**",
 ]
+```
+
+### Backup Modes
+
+- **incremental**: Content-addressed storage with automatic deduplication. Best for frequent backups.
+- **archive**: Compressed tarballs with timestamps. Best for occasional snapshots.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `init` | Initialize dotmatrix and git repository |
+| `add <patterns>` | Add file patterns to tracking |
+| `remove <patterns>` | Remove patterns from tracking |
+| `scan` | Scan tracked files and update index |
+| `backup [-m msg]` | Backup tracked files to storage |
+| `restore [--dry-run]` | Restore files from backup |
+| `status` | Show changes since last backup |
+| `list` | List tracked patterns |
+
+### Global Flags
+
+- `-v, --verbose`: Increase verbosity (`-v` for verbose, `-vv` for debug)
+- `-h, --help`: Show help
+- `-V, --version`: Show version
+
+### Restore Options
+
+```bash
+dotmatrix restore              # Interactive with comparison view
+dotmatrix restore --dry-run    # Preview only, no changes
+dotmatrix restore --diff       # Show file diffs
+dotmatrix restore --yes        # Auto-confirm (still creates safety backup)
+dotmatrix restore --file .bashrc  # Restore specific file
+```
+
+### Status Options
+
+```bash
+dotmatrix status           # Show only changes
+dotmatrix status --all     # Include unchanged files
+dotmatrix status --quick   # Fast mode (size/mtime only)
+dotmatrix status --json    # JSON output for scripting
 ```
 
 ## Directory Structure
 
 ```
 ~/.config/dotmatrix/
-└── config.toml              # Your configuration
+└── config.toml
 
 ~/.local/share/dotmatrix/
-├── index.json               # File index database
-├── storage/                 # Backup storage
-│   ├── <hash1>/
-│   ├── <hash2>/
-│   └── ...
-└── .git/                    # Version control
+├── index.json
+├── storage/          # Incremental backups (by hash)
+├── archives/         # Tarball backups
+└── .git/
 ```
 
-## Commands
+## Safety Features
 
-### `dotmatrix init`
-Initialize dotmatrix with default configuration and create necessary directories.
-
-### `dotmatrix add <patterns>`
-Add file patterns to tracking list. Works with any readable file on the system.
-
-```bash
-dotmatrix add ~/.vimrc ~/.config/fish/**
-dotmatrix add /etc/nginx/nginx.conf /etc/hosts
-```
-
-### `dotmatrix scan`
-Scan all tracked files and update the index with current state.
-
-### `dotmatrix backup [-m <message>]`
-Create a backup of all tracked files and commit to version control.
-
-```bash
-dotmatrix backup -m "Updated neovim config"
-```
-
-### `dotmatrix restore [--commit <hash>]`
-Restore files from backup. Without a commit hash, restores from latest backup.
-
-```bash
-dotmatrix restore --commit abc123
-```
-
-### `dotmatrix status`
-Show which tracked files have changed since last backup.
-
-### `dotmatrix list`
-List all currently tracked files and patterns.
-
-### `dotmatrix remove <patterns>`
-Remove file patterns from tracking.
-
-## Development Status
-
-dotmatrix is in early development. Current status:
-
-- [x] Project structure and CLI skeleton
-- [x] Config and index management
-- [x] XDG directory support
-- [ ] File scanning and hashing
-- [ ] Backup implementation
-- [ ] Git integration
-- [ ] Restore functionality
-- [ ] Pattern matching (glob support)
-- [ ] Exclude list handling
-- [ ] Status command
-- [ ] TUI interface
-- [ ] Tests
-- [ ] Documentation
-
-## Contributing
-
-Contributions are welcome! This is an early-stage project, so there's plenty of room for:
-
-- Feature implementations
-- Bug fixes
-- Documentation improvements
-- Testing
-- Ideas and suggestions
+- **Comparison view**: See dates, sizes, and newer/older indicators before restore
+- **Diff viewing**: Preview exact changes with `--diff`
+- **Safety backup**: Automatic backup of current files before any restore
+- **Dry-run mode**: Preview what would happen without making changes
 
 ## Development
 
 ```bash
-# Run in development
-cargo run -- init
-
-# Run tests (when we have them)
-cargo test
-
-# Build release
-cargo build --release
-
-# Format code
-cargo fmt
-
-# Lint
-cargo clippy
+make build      # Debug build
+make release    # Release build
+make test       # Run tests
+make lint       # Run clippy
+make fmt        # Format code
 ```
 
 ## License
 
 MIT License - See LICENSE file for details
-
-## Inspiration
-
-- The eternal wisdom of Spaceballs
-- The pain of managing dotfiles across multiple machines
-- The realization that symlinks aren't always the answer
 
 ## Author
 
@@ -224,4 +158,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-*"What's the matter, Colonel Sandurz? Chicken?"* 🐔
+*"What's the matter, Colonel Sandurz? Chicken?"*

@@ -1,0 +1,191 @@
+.TH DOTMATRIX 1 "January 2026" "dotmatrix 0.1.0" "User Commands"
+.SH NAME
+dotmatrix \- dotfile management and versioning tool
+.SH SYNOPSIS
+.B dotmatrix
+[\fB\-v\fR|\fB\-\-verbose\fR]
+.I command
+[\fIoptions\fR]
+.SH DESCRIPTION
+.B dotmatrix
+is a dotfile management tool that indexes configuration files where they live,
+without using symlinks. It provides version control through git integration
+and supports two backup modes: incremental (content-addressed) and archive (tarballs).
+.SH GLOBAL OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Increase verbosity. Use \fB\-v\fR for verbose output, \fB\-vv\fR for debug output.
+.TP
+.BR \-h ", " \-\-help
+Print help information.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH COMMANDS
+.SS init
+Initialize dotmatrix configuration and storage directories. Creates config file,
+index, and git repository. Prompts for git identity if not configured globally.
+.SS add \fIpatterns\fR...
+Add file patterns to the tracking list.
+.PP
+.RS
+.nf
+dotmatrix add ~/.bashrc
+dotmatrix add ~/.config/nvim/**
+dotmatrix add /etc/nginx/nginx.conf
+.fi
+.RE
+.SS remove \fIpatterns\fR...
+Remove file patterns from the tracking list.
+.SS scan [\fB\-\-yes\fR]
+Scan all tracked files and update the index with current metadata (hash, size, mtime).
+.TP
+.BR \-y ", " \-\-yes
+Auto-confirm cleanup of orphaned entries.
+.SS backup [\fB\-m\fR \fImessage\fR]
+Backup tracked files to storage. Uses incremental or archive mode based on config.
+.TP
+.BR \-m ", " \-\-message " " \fImessage\fR
+Commit message for git (if enabled).
+.SS restore [\fIoptions\fR]
+Restore files from backup. Shows comparison view and requires confirmation.
+.TP
+.BR \-\-dry\-run
+Show what would be restored without making changes.
+.TP
+.BR \-\-diff
+Show file differences for each file.
+.TP
+.BR \-y ", " \-\-yes
+Auto-confirm restore (still creates safety backup).
+.TP
+.BR \-f ", " \-\-file " " \fIpattern\fR
+Restore only files matching pattern.
+.TP
+.BR \-c ", " \-\-commit " " \fIhash\fR
+Restore from specific git commit.
+.SS status [\fIoptions\fR]
+Show status of tracked files compared to last backup.
+.TP
+.BR \-a ", " \-\-all
+Show all files including unchanged.
+.TP
+.BR \-q ", " \-\-quick
+Quick mode: compare by size/mtime only (skip hash calculation).
+.TP
+.BR \-\-json
+Output in JSON format for scripting.
+.SS list
+List all tracked file patterns and exclude patterns.
+.SH CONFIGURATION
+Configuration is stored in \fI~/.config/dotmatrix/config.toml\fR:
+.PP
+.RS
+.nf
+git_enabled = true
+backup_mode = "incremental"  # or "archive"
+
+tracked_files = [
+    "~/.bashrc",
+    "~/.config/nvim/**",
+]
+
+exclude = [
+    "**/*.log",
+    "**/node_modules/**",
+]
+.fi
+.RE
+.SS BACKUP MODES
+.TP
+.B incremental
+Files are stored by SHA256 hash in content-addressed storage.
+Provides automatic deduplication. Best for frequent backups.
+.TP
+.B archive
+Files are stored as compressed tarballs with timestamps.
+Best for occasional snapshots.
+.SH FILES
+.TP
+.I ~/.config/dotmatrix/config.toml
+Configuration file.
+.TP
+.I ~/.local/share/dotmatrix/index.json
+File metadata index.
+.TP
+.I ~/.local/share/dotmatrix/storage/
+Content-addressed backup storage (incremental mode).
+.TP
+.I ~/.local/share/dotmatrix/archives/
+Tarball backup storage (archive mode).
+.TP
+.I ~/.local/share/dotmatrix/.git/
+Git repository for version control.
+.TP
+.I ~/.dotmatrix-restore-backup-*/
+Safety backups created before restore operations.
+.SH PATTERN MATCHING
+.B dotmatrix
+supports glob patterns for file matching:
+.PP
+.RS
+.nf
+~/.bashrc              # Single file
+~/.config/*            # All files in directory
+~/.config/**           # All files recursively
+~/.config/**/*.lua     # All .lua files recursively
+.fi
+.RE
+.SH EXAMPLES
+.SS Basic workflow
+.PP
+.RS
+.nf
+# Initialize
+dotmatrix init
+
+# Add files to track
+dotmatrix add ~/.bashrc ~/.zshrc
+
+# Scan to index files
+dotmatrix scan
+
+# Create backup
+dotmatrix backup -m "Initial backup"
+
+# Check status
+dotmatrix status
+
+# Restore (interactive)
+dotmatrix restore
+.fi
+.RE
+.SS Preview restore changes
+.PP
+.RS
+.nf
+dotmatrix restore --dry-run --diff
+.fi
+.RE
+.SS Verbose output
+.PP
+.RS
+.nf
+dotmatrix -v backup
+dotmatrix -vv status
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Error occurred.
+.SH SEE ALSO
+.BR git (1),
+.BR rsync (1)
+.SH BUGS
+Report bugs at: https://github.com/Woofson/dotmatrix/issues
+.SH AUTHOR
+Woofson <https://github.com/Woofson>

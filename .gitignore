@@ -1,40 +1,22 @@
-# Rust
+# Build artifacts
 /target/
-**/*.rs.bk
-*.pdb
 Cargo.lock
 
-# IDEs and Editors
+# Editor/IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
+Thumbs.db
 
-# Build artifacts
-*.o
-*.so
-*.dylib
-*.dll
-*.exe
-
-# Testing
-*.profraw
-*.profdata
-
-# Documentation
-/doc/
+# Claude Code
+.claude/
+conversation.txt
 
 # Backup files
 *.bak
 *.tmp
-
-# OS specific
-Thumbs.db
-.Spotlight-V100
-.Trashes
-
-# Project specific
-/test-data/
-/local/

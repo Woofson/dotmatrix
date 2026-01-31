@@ -15,3 +15,5 @@ clap = { version = "4.5", features = ["derive"] }
 glob = "0.3"
 chrono = "0.4"
 anyhow = "1.0"
+flate2 = "1.0"
+tar = "0.4"

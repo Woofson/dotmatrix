@@ -1,6 +1,6 @@
 # Makefile for dotmatrix
 
-.PHONY: all build release clean install uninstall run help test
+.PHONY: all build release clean install uninstall install-man run help test
 
 # Default target
 all: release
@@ -28,6 +28,14 @@ install: release
 	@echo "📦 Installing dotmatrix..."
 	@cargo install --path .
 	@echo "✓ Installed! You can now run 'dotmatrix' from anywhere"
+	@echo "💡 Run 'sudo make install-man' to install the man page"
+
+# Install man page (requires sudo)
+install-man:
+	@echo "📖 Installing man page..."
+	@install -d /usr/local/share/man/man1
+	@install -m 644 dotmatrix.1 /usr/local/share/man/man1/
+	@echo "✓ Man page installed! Try 'man dotmatrix'"
 
 # Uninstall from system
 uninstall:
@@ -63,20 +71,20 @@ lint:
 help:
 	@echo "dotmatrix - Makefile targets:"
 	@echo ""
-	@echo "  make build      - Build in debug mode"
-	@echo "  make release    - Build in release mode (optimized)"
-	@echo "  make clean      - Remove build artifacts"
-	@echo "  make install    - Install to system (~/.cargo/bin/)"
-	@echo "  make uninstall  - Remove from system"
-	@echo "  make run ARGS='init' - Run with arguments"
-	@echo "  make test       - Run tests"
-	@echo "  make check      - Check code without building"
-	@echo "  make fmt        - Format code with rustfmt"
-	@echo "  make lint       - Run clippy linter"
-	@echo "  make help       - Show this help message"
+	@echo "  make build       - Build in debug mode"
+	@echo "  make release     - Build in release mode (optimized)"
+	@echo "  make clean       - Remove build artifacts"
+	@echo "  make install     - Install binary to ~/.cargo/bin/"
+	@echo "  make install-man - Install man page (requires sudo)"
+	@echo "  make uninstall   - Remove from system"
+	@echo "  make run ARGS='' - Run with arguments"
+	@echo "  make test        - Run tests"
+	@echo "  make check       - Check code without building"
+	@echo "  make fmt         - Format code with rustfmt"
+	@echo "  make lint        - Run clippy linter"
+	@echo "  make help        - Show this help message"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make              # Build release version"
+	@echo "  make                   # Build release version"
 	@echo "  make run ARGS='init'"
-	@echo "  make run ARGS='scan'"
-	@echo "  make install      # Install system-wide"
+	@echo "  make install && sudo make install-man"

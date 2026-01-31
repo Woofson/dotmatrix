@@ -1,0 +1,11 @@
+31.01.2025 13:35
+Can define backup method to individual folders/files. Incremental or archive.
+If no method is chosen through add or config file, then defaults to a pre-set method in the config file. Selection on where to restore files, if user is doing distro-hopping or has changed usernames or environments.
+
+TUI file explorer of backed up files, and methods to view, restore or delete from backup and other nice-to-have tui-tools for backup handling.
+TUI selector for adding files to be backed up or unchecked from backup.
+Can be the same interface with two or more roles for example.
+
+Bump version when the TUI stuff is in place.
+
+I want no limitations what types of files to be backed up, this isnt just for dotfiles, but its primarily usage is dotfiles and configurations.

@@ -10,10 +10,10 @@ use crate::index::FileEntry;
 
 /// Expand a path with ~ to the user's home directory
 pub fn expand_tilde(path: &str) -> Result<PathBuf> {
-    if path.starts_with("~/") {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-        Ok(home.join(&path[2..]))
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+        Ok(home.join(rest))
     } else {
         Ok(PathBuf::from(path))
     }
@@ -22,19 +22,19 @@ pub fn expand_tilde(path: &str) -> Result<PathBuf> {
 /// Check if a path matches any exclude pattern
 pub fn is_excluded(path: &Path, exclude_patterns: &[String]) -> bool {
     let path_str = path.to_string_lossy();
-    
+
     for pattern in exclude_patterns {
         // Expand pattern if it contains ~
-        let expanded_pattern = if pattern.starts_with("~/") {
+        let expanded_pattern = if let Some(rest) = pattern.strip_prefix("~/") {
             if let Some(home) = dirs::home_dir() {
-                home.join(&pattern[2..]).to_string_lossy().to_string()
+                home.join(rest).to_string_lossy().to_string()
             } else {
                 pattern.clone()
             }
         } else {
             pattern.clone()
         };
-        
+
         // Use glob pattern matching
         if let Ok(pattern_obj) = glob::Pattern::new(&expanded_pattern) {
             if pattern_obj.matches(&path_str) {
@@ -42,29 +42,30 @@ pub fn is_excluded(path: &Path, exclude_patterns: &[String]) -> bool {
             }
         }
     }
-    
+
     false
 }
 
 /// Calculate SHA256 hash of a file
 pub fn hash_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192]; // 8KB buffer for efficient reading
-    
+
     loop {
-        let bytes_read = file.read(&mut buffer)
+        let bytes_read = file
+            .read(&mut buffer)
             .with_context(|| format!("Failed to read file: {}", path.display()))?;
-        
+
         if bytes_read == 0 {
             break;
         }
-        
+
         hasher.update(&buffer[..bytes_read]);
     }
-    
+
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -72,17 +73,18 @@ pub fn hash_file(path: &Path) -> Result<String> {
 pub fn scan_file(path: &Path) -> Result<FileEntry> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
-    
+
     let size = metadata.len();
-    
-    let last_modified = metadata.modified()
+
+    let last_modified = metadata
+        .modified()
         .with_context(|| format!("Failed to get modification time: {}", path.display()))?
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    
+
     let hash = hash_file(path)?;
-    
+
     Ok(FileEntry {
         path: path.to_path_buf(),
         hash,
@@ -95,15 +97,15 @@ pub fn scan_file(path: &Path) -> Result<FileEntry> {
 pub fn scan_pattern(pattern: &str, exclude_patterns: &[String]) -> Result<Vec<PathBuf>> {
     let expanded = expand_tilde(pattern)?;
     let mut pattern_str = expanded.to_string_lossy().to_string();
-    
+
     // If pattern ends with /**, append /* to actually match files
     // glob's ** matches directories, but we need to match files inside them
     if pattern_str.ends_with("/**") {
         pattern_str.push_str("/*");
     }
-    
+
     let mut files = Vec::new();
-    
+
     // If the pattern has no glob characters, treat it as a literal path
     if !pattern_str.contains('*') && !pattern_str.contains('?') && !pattern_str.contains('[') {
         let path = PathBuf::from(&pattern_str);
@@ -124,8 +126,8 @@ pub fn scan_pattern(pattern: &str, exclude_patterns: &[String]) -> Result<Vec<Pa
         }
     } else {
         // Use glob to find matching files
-        for entry in glob(&pattern_str)
-            .with_context(|| format!("Invalid glob pattern: {}", pattern_str))?
+        for entry in
+            glob(&pattern_str).with_context(|| format!("Invalid glob pattern: {}", pattern_str))?
         {
             match entry {
                 Ok(path) => {
@@ -139,71 +141,95 @@ pub fn scan_pattern(pattern: &str, exclude_patterns: &[String]) -> Result<Vec<Pa
             }
         }
     }
-    
+
     Ok(files)
+}
+
+/// Verbosity level for scanning operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Verbosity {
+    Quiet,   // No output
+    #[default]
+    Normal,  // Only errors/warnings
+    Verbose, // Show patterns being processed
+    Debug,   // Show all files found
 }
 
 /// Scan multiple patterns and return all matching files
 pub fn scan_patterns(patterns: &[String], exclude_patterns: &[String]) -> Result<Vec<PathBuf>> {
+    scan_patterns_with_verbosity(patterns, exclude_patterns, Verbosity::Normal)
+}
+
+/// Scan multiple patterns with specified verbosity level
+pub fn scan_patterns_with_verbosity(
+    patterns: &[String],
+    exclude_patterns: &[String],
+    verbosity: Verbosity,
+) -> Result<Vec<PathBuf>> {
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
-    
+
     for pattern in patterns {
-        eprintln!("DEBUG: Processing pattern: {}", pattern);
+        if verbosity >= Verbosity::Verbose {
+            eprintln!("Scanning pattern: {}", pattern);
+        }
         match scan_pattern(pattern, exclude_patterns) {
             Ok(mut files) => {
-                eprintln!("DEBUG:   Found {} files", files.len());
-                for f in &files {
-                    eprintln!("DEBUG:     - {}", f.display());
+                if verbosity >= Verbosity::Verbose {
+                    eprintln!("  Found {} files", files.len());
+                }
+                if verbosity >= Verbosity::Debug {
+                    for f in &files {
+                        eprintln!("    {}", f.display());
+                    }
                 }
                 all_files.append(&mut files);
             }
             Err(e) => {
-                eprintln!("DEBUG:   Error: {}", e);
+                if verbosity >= Verbosity::Verbose {
+                    eprintln!("  Error: {}", e);
+                }
                 errors.push(format!("Pattern '{}': {}", pattern, e));
             }
         }
     }
-    
+
     // Remove duplicates (in case patterns overlap)
     all_files.sort();
     all_files.dedup();
-    
-    // Report errors but don't fail completely
-    if !errors.is_empty() {
+
+    // Report errors but don't fail completely (unless quiet)
+    if !errors.is_empty() && verbosity >= Verbosity::Normal {
         eprintln!("⚠️  Some patterns had errors:");
         for error in &errors {
             eprintln!("   {}", error);
         }
     }
-    
+
     Ok(all_files)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_expand_tilde() {
         let result = expand_tilde("~/test.txt").unwrap();
         assert!(result.to_string_lossy().contains("test.txt"));
         assert!(!result.to_string_lossy().contains("~"));
     }
-    
+
     #[test]
     fn test_expand_tilde_no_home() {
         let result = expand_tilde("/etc/test.txt").unwrap();
         assert_eq!(result, PathBuf::from("/etc/test.txt"));
     }
-    
+
     #[test]
     fn test_is_excluded() {
-        let exclude = vec![
-            "**/*.log".to_string(),
-            "**/.DS_Store".to_string(),
-        ];
-        
+        let exclude = vec!["**/*.log".to_string(), "**/.DS_Store".to_string()];
+
         assert!(is_excluded(Path::new("/home/user/test.log"), &exclude));
         assert!(is_excluded(Path::new("/home/user/.DS_Store"), &exclude));
         assert!(!is_excluded(Path::new("/home/user/test.txt"), &exclude));

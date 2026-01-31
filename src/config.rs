@@ -1,10 +1,16 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
+
+fn default_backup_mode() -> String {
+    "incremental".to_string()
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     pub git_enabled: bool,
+    #[serde(default = "default_backup_mode")]
+    pub backup_mode: String, // "incremental" or "archive"
     pub tracked_files: Vec<String>,
     pub exclude: Vec<String>,
 }
@@ -13,6 +19,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             git_enabled: true,
+            backup_mode: "incremental".to_string(),
             tracked_files: vec![
                 "~/.bashrc".to_string(),
                 "~/.zshrc".to_string(),
@@ -41,7 +48,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        
+
         let content = toml::to_string_pretty(&self)?;
         fs::write(path, content)?;
         Ok(())
