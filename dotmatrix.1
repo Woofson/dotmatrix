@@ -64,6 +64,14 @@ Restore only files matching pattern.
 .TP
 .BR \-c ", " \-\-commit " " \fIhash\fR
 Restore from specific git commit.
+.TP
+.BR \-\-extract\-to " " \fIdirectory\fR
+Extract all files to specified directory (preserving structure).
+Useful for reviewing before overwriting originals.
+.TP
+.BR \-\-remap " " \fIold=new\fR
+Remap paths during restore. Format: /old/path=/new/path.
+Useful for distro-hopping or username changes.
 .SS status [\fIoptions\fR]
 Show status of tracked files compared to last backup.
 .TP
@@ -77,17 +85,53 @@ Quick mode: compare by size/mtime only (skip hash calculation).
 Output in JSON format for scripting.
 .SS list
 List all tracked file patterns and exclude patterns.
+.SS tui
+Launch interactive terminal user interface. Provides keyboard-driven navigation
+for browsing tracked files, viewing status, and managing patterns.
+.PP
+.B Key bindings:
+.RS
+.TP
+.B j/k, Up/Down
+Navigate file list
+.TP
+.B Tab
+Switch between Status/Browse/Add modes
+.TP
+.B Space
+Toggle selection
+.TP
+.B Enter
+Toggle tracking (add/remove pattern)
+.TP
+.B a
+Add new pattern manually
+.TP
+.B d
+Remove selected from index
+.TP
+.B r
+Refresh file list
+.TP
+.B ?
+Show help
+.TP
+.B q
+Quit
+.RE
 .SH CONFIGURATION
 Configuration is stored in \fI~/.config/dotmatrix/config.toml\fR:
 .PP
 .RS
 .nf
 git_enabled = true
-backup_mode = "incremental"  # or "archive"
+backup_mode = "incremental"  # default mode
 
 tracked_files = [
     "~/.bashrc",
-    "~/.config/nvim/**",
+    "~/.zshrc",
+    # Per-pattern mode override
+    { path = "~/.config/nvim/**", mode = "archive" },
 ]
 
 exclude = [
@@ -105,6 +149,13 @@ Provides automatic deduplication. Best for frequent backups.
 .B archive
 Files are stored as compressed tarballs with timestamps.
 Best for occasional snapshots.
+.PP
+Patterns can override the default mode by using the object syntax:
+.RS
+.nf
+{ path = "~/.config/nvim/**", mode = "archive" }
+.fi
+.RE
 .SH FILES
 .TP
 .I ~/.config/dotmatrix/config.toml
@@ -167,12 +218,30 @@ dotmatrix restore
 dotmatrix restore --dry-run --diff
 .fi
 .RE
+.SS Restore to different location
+.PP
+.RS
+.nf
+# Extract to staging directory
+dotmatrix restore --extract-to ~/restored
+
+# Remap paths for new username
+dotmatrix restore --remap /home/olduser=/home/newuser
+.fi
+.RE
 .SS Verbose output
 .PP
 .RS
 .nf
 dotmatrix -v backup
 dotmatrix -vv status
+.fi
+.RE
+.SS Interactive TUI
+.PP
+.RS
+.nf
+dotmatrix tui
 .fi
 .RE
 .SH EXIT STATUS

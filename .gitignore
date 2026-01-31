@@ -16,6 +16,9 @@ Thumbs.db
 # Claude Code
 .claude/
 conversation.txt
+DESIGN_NOTES.md
+dotmatrix.1
+CLAUDE.md
 
 # Backup files
 *.bak

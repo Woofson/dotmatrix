@@ -1,8 +1,9 @@
 use chrono::{Local, TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use dotmatrix::config::Config;
+use dotmatrix::config::{BackupMode, Config, TrackedPattern};
 use dotmatrix::index::{FileEntry, Index};
 use dotmatrix::scanner::{self, Verbosity};
+use dotmatrix::tui;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
@@ -64,6 +65,12 @@ enum Commands {
         /// Restore only specific file(s)
         #[arg(short, long)]
         file: Option<Vec<String>>,
+        /// Extract all files to a directory (preserving structure)
+        #[arg(long)]
+        extract_to: Option<String>,
+        /// Remap home directory (e.g., --remap /home/olduser=/home/newuser)
+        #[arg(long)]
+        remap: Option<String>,
     },
     /// Show status of tracked files
     Status {
@@ -81,6 +88,8 @@ enum Commands {
     List,
     /// Remove files from tracking
     Remove { patterns: Vec<String> },
+    /// Launch interactive TUI
+    Tui,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -92,12 +101,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Add { patterns } => cmd_add(patterns)?,
         Commands::Scan { yes } => cmd_scan(yes, verbosity)?,
         Commands::Backup { message } => cmd_backup(message, verbosity)?,
-        Commands::Restore { commit, dry_run, yes, diff, file } => {
-            cmd_restore(commit, dry_run, yes, diff, file, verbosity)?
+        Commands::Restore { commit, dry_run, yes, diff, file, extract_to, remap } => {
+            cmd_restore(commit, dry_run, yes, diff, file, extract_to, remap, verbosity)?
         }
         Commands::Status { all, quick, json } => cmd_status(all, quick, json, verbosity)?,
         Commands::List => cmd_list()?,
         Commands::Remove { patterns } => cmd_remove(patterns)?,
+        Commands::Tui => cmd_tui()?,
     }
 
     Ok(())
@@ -270,8 +280,9 @@ fn cmd_add(patterns: Vec<String>) -> anyhow::Result<()> {
     // Add new patterns (avoid duplicates)
     let mut added = 0;
     for pattern in &patterns {
-        if !config.tracked_files.contains(pattern) {
-            config.tracked_files.push(pattern.clone());
+        let already_tracked = config.tracked_files.iter().any(|p| p.path() == pattern);
+        if !already_tracked {
+            config.tracked_files.push(TrackedPattern::simple(pattern));
             println!("✓ Added: {}", pattern);
             added += 1;
         } else {
@@ -309,6 +320,7 @@ fn cmd_scan(auto_yes: bool, verbosity: Verbosity) -> anyhow::Result<()> {
     };
 
     // Find all files matching patterns
+    let pattern_strings = config.pattern_strings();
     if verbosity >= Verbosity::Verbose {
         println!("Finding files matching patterns...");
         for pattern in &config.tracked_files {
@@ -318,7 +330,7 @@ fn cmd_scan(auto_yes: bool, verbosity: Verbosity) -> anyhow::Result<()> {
     }
 
     let files = scanner::scan_patterns_with_verbosity(
-        &config.tracked_files,
+        &pattern_strings,
         &config.exclude,
         verbosity,
     )?;
@@ -705,6 +717,39 @@ fn backup_archive(
     Ok(())
 }
 
+/// Check if a file path matches a glob pattern (with ~ expansion)
+fn path_matches_pattern(file: &Path, pattern: &str) -> bool {
+    let expanded_pattern = if let Some(stripped) = pattern.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(stripped).to_string_lossy().to_string()
+        } else {
+            pattern.to_string()
+        }
+    } else {
+        pattern.to_string()
+    };
+
+    // Use glob pattern matching
+    if let Ok(glob_pattern) = glob::Pattern::new(&expanded_pattern) {
+        glob_pattern.matches_path(file)
+    } else {
+        // Fallback to exact match
+        file.to_string_lossy() == expanded_pattern
+    }
+}
+
+/// Determine the effective backup mode for a file based on matching patterns
+fn get_file_mode(file: &Path, config: &Config) -> BackupMode {
+    // Check patterns in reverse order (later patterns override earlier ones)
+    for pattern in config.tracked_files.iter().rev() {
+        if path_matches_pattern(file, pattern.path()) {
+            return config.mode_for_pattern(pattern);
+        }
+    }
+    // Default to global backup mode
+    config.backup_mode
+}
+
 fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<()> {
     println!("Creating backup...\n");
 
@@ -724,8 +769,9 @@ fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<(
         Index::new()
     };
 
+    let pattern_strings = config.pattern_strings();
     let files = scanner::scan_patterns_with_verbosity(
-        &config.tracked_files,
+        &pattern_strings,
         &config.exclude,
         verbosity,
     )?;
@@ -736,26 +782,61 @@ fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<(
         return Ok(());
     }
 
-    println!("Found {} files to backup.", files.len());
+    // Group files by their effective backup mode
+    let mut incremental_files: Vec<PathBuf> = Vec::new();
+    let mut archive_files: Vec<PathBuf> = Vec::new();
 
-    match config.backup_mode.as_str() {
-        "archive" => backup_archive(
-            &files,
-            &mut index,
-            &index_path,
-            &data_dir,
-            message,
-            config.git_enabled,
-        ),
-        _ => backup_incremental(
-            &files,
-            &mut index,
-            &index_path,
-            &data_dir,
-            message,
-            config.git_enabled,
-        ),
+    for file in files {
+        match get_file_mode(&file, &config) {
+            BackupMode::Archive => archive_files.push(file),
+            BackupMode::Incremental => incremental_files.push(file),
+        }
     }
+
+    let total_files = incremental_files.len() + archive_files.len();
+    println!("Found {} files to backup.", total_files);
+
+    if !incremental_files.is_empty() && !archive_files.is_empty() {
+        println!(
+            "   {} files (incremental), {} files (archive)\n",
+            incremental_files.len(),
+            archive_files.len()
+        );
+    } else {
+        println!();
+    }
+
+    // Backup incremental files first
+    if !incremental_files.is_empty() {
+        backup_incremental(
+            &incremental_files,
+            &mut index,
+            &index_path,
+            &data_dir,
+            None, // Don't commit yet
+            false, // Don't commit yet
+        )?;
+    }
+
+    // Then backup archive files
+    if !archive_files.is_empty() {
+        backup_archive(
+            &archive_files,
+            &mut index,
+            &index_path,
+            &data_dir,
+            None, // Don't commit yet
+            false, // Don't commit yet
+        )?;
+    }
+
+    // Single git commit at the end
+    if config.git_enabled {
+        let msg = message.unwrap_or_else(|| format!("Backup: {} files", total_files));
+        git_commit(&data_dir, msg, total_files)?;
+    }
+
+    Ok(())
 }
 
 /// Format file size for human-readable display
@@ -789,7 +870,8 @@ fn display_path(path: &Path) -> String {
 
 /// Comparison info for a file
 struct FileComparison {
-    path: PathBuf,
+    path: PathBuf,          // Original path in backup
+    dest_path: PathBuf,     // Destination path (after remap/extract_to)
     current_exists: bool,
     current_size: Option<u64>,
     current_mtime: Option<u64>,
@@ -819,7 +901,7 @@ impl FileComparison {
 
 /// Create safety backup of current files before restore
 fn create_restore_backup(files: &[&FileComparison]) -> anyhow::Result<Option<PathBuf>> {
-    // Only backup files that exist
+    // Only backup files that exist (at destination path)
     let existing: Vec<_> = files.iter().filter(|f| f.current_exists).collect();
     if existing.is_empty() {
         return Ok(None);
@@ -832,15 +914,15 @@ fn create_restore_backup(files: &[&FileComparison]) -> anyhow::Result<Option<Pat
     fs::create_dir_all(&backup_dir)?;
 
     for comp in existing {
-        // Preserve directory structure in backup
-        let rel_path = comp.path.to_string_lossy().trim_start_matches('/').to_string();
+        // Preserve directory structure in backup (use dest_path since that's where the file is)
+        let rel_path = comp.dest_path.to_string_lossy().trim_start_matches('/').to_string();
         let dest = backup_dir.join(&rel_path);
 
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        fs::copy(&comp.path, &dest)?;
+        fs::copy(&comp.dest_path, &dest)?;
     }
 
     Ok(Some(backup_dir))
@@ -889,15 +971,86 @@ fn show_file_diff(current_path: &Path, backup_hash: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Parse remap option (format: /old/path=/new/path)
+fn parse_remap(remap: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = remap.splitn(2, '=').collect();
+    if parts.len() == 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
+}
+
+/// Apply path remapping for restore
+fn remap_path(path: &Path, remap: Option<&(String, String)>, extract_to: Option<&Path>) -> PathBuf {
+    let path_str = path.to_string_lossy();
+
+    // First apply remap if specified
+    let remapped = if let Some((from, to)) = remap {
+        if path_str.starts_with(from) {
+            PathBuf::from(path_str.replacen(from, to, 1))
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    // Then apply extract_to if specified
+    if let Some(base) = extract_to {
+        // Strip leading / and join with extract_to base
+        let rel_path = remapped.to_string_lossy().trim_start_matches('/').to_string();
+        base.join(rel_path)
+    } else {
+        remapped
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_restore(
     _commit: Option<String>,
     dry_run: bool,
     auto_yes: bool,
     show_diff: bool,
     filter_files: Option<Vec<String>>,
+    extract_to: Option<String>,
+    remap: Option<String>,
     _verbosity: Verbosity,
 ) -> anyhow::Result<()> {
     println!("Preparing restore...\n");
+
+    // Parse remap option
+    let remap_pair = remap.as_ref().and_then(|r| {
+        let parsed = parse_remap(r);
+        if parsed.is_none() {
+            eprintln!("⚠️  Invalid remap format. Use: --remap /old/path=/new/path");
+        }
+        parsed
+    });
+
+    // Parse extract_to path
+    let extract_path = extract_to.map(|p| {
+        let expanded = if let Some(stripped) = p.strip_prefix("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(stripped)
+            } else {
+                PathBuf::from(p)
+            }
+        } else {
+            PathBuf::from(p)
+        };
+        expanded
+    });
+
+    if let Some(ref path) = extract_path {
+        println!("📂 Extract destination: {}", path.display());
+    }
+    if let Some((ref from, ref to)) = remap_pair {
+        println!("🔄 Path remapping: {} → {}", from, to);
+    }
+    if extract_path.is_some() || remap_pair.is_some() {
+        println!();
+    }
 
     let config_path = dotmatrix::get_config_path()?;
     let index_path = dotmatrix::get_index_path()?;
@@ -944,15 +1097,23 @@ fn cmd_restore(
     let mut comparisons: Vec<FileComparison> = Vec::new();
 
     for entry in &entries {
-        let current_exists = entry.path.exists();
+        // Calculate destination path (with remap/extract_to applied)
+        let dest_path = remap_path(
+            &entry.path,
+            remap_pair.as_ref(),
+            extract_path.as_deref(),
+        );
+
+        // Check if destination exists (not original path)
+        let current_exists = dest_path.exists();
         let (current_size, current_mtime, current_hash) = if current_exists {
-            let meta = fs::metadata(&entry.path)?;
+            let meta = fs::metadata(&dest_path)?;
             let mtime = meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs());
-            let hash = scanner::hash_file(&entry.path).ok();
+            let hash = scanner::hash_file(&dest_path).ok();
             (Some(meta.len()), mtime, hash)
         } else {
             (None, None, None)
@@ -960,6 +1121,7 @@ fn cmd_restore(
 
         comparisons.push(FileComparison {
             path: entry.path.clone(),
+            dest_path,
             current_exists,
             current_size,
             current_mtime,
@@ -983,7 +1145,13 @@ fn cmd_restore(
 
     let mut warnings = 0;
     for comp in &to_restore {
-        println!("{}", display_path(&comp.path));
+        // Show original path and destination if different
+        if comp.path != comp.dest_path {
+            println!("{}", display_path(&comp.path));
+            println!("  → {}", display_path(&comp.dest_path));
+        } else {
+            println!("{}", display_path(&comp.path));
+        }
 
         if comp.current_exists {
             let newer_marker = if comp.current_is_newer() {
@@ -1017,7 +1185,7 @@ fn cmd_restore(
         // Show diff if requested
         if show_diff {
             println!("\n  --- Diff ---");
-            show_file_diff(&comp.path, &comp.backup_hash)?;
+            show_file_diff(&comp.dest_path, &comp.backup_hash)?;
         }
 
         println!();
@@ -1055,8 +1223,8 @@ fn cmd_restore(
             // Show diffs and ask again
             println!("\n--- Showing diffs ---\n");
             for comp in &to_restore {
-                println!("{}:", display_path(&comp.path));
-                show_file_diff(&comp.path, &comp.backup_hash)?;
+                println!("{}:", display_path(&comp.dest_path));
+                show_file_diff(&comp.dest_path, &comp.backup_hash)?;
                 println!();
             }
 
@@ -1106,7 +1274,15 @@ fn cmd_restore(
     let mut errors = 0;
 
     for comp in &to_restore {
-        print!("Restoring: {} ... ", display_path(&comp.path));
+        // Show destination path if different from original
+        if comp.path != comp.dest_path {
+            print!("Restoring: {} → {} ... ",
+                display_path(&comp.path),
+                display_path(&comp.dest_path)
+            );
+        } else {
+            print!("Restoring: {} ... ", display_path(&comp.dest_path));
+        }
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         // Get backup file from storage
@@ -1114,7 +1290,7 @@ fn cmd_restore(
 
         if !storage_path.exists() {
             // Try archive mode
-            if config.backup_mode == "archive" {
+            if config.backup_mode == BackupMode::Archive {
                 println!("❌ Archive restore not yet implemented");
                 errors += 1;
                 continue;
@@ -1125,8 +1301,8 @@ fn cmd_restore(
             }
         }
 
-        // Create parent directory if needed
-        if let Some(parent) = comp.path.parent() {
+        // Create parent directory if needed (use dest_path)
+        if let Some(parent) = comp.dest_path.parent() {
             if !parent.exists() {
                 if let Err(e) = fs::create_dir_all(parent) {
                     println!("❌ Failed to create directory: {}", e);
@@ -1136,8 +1312,8 @@ fn cmd_restore(
             }
         }
 
-        // Copy from storage to original location
-        match fs::copy(&storage_path, &comp.path) {
+        // Copy from storage to destination
+        match fs::copy(&storage_path, &comp.dest_path) {
             Ok(_) => {
                 println!("✓");
                 restored += 1;
@@ -1210,9 +1386,10 @@ fn cmd_status(show_all: bool, quick_mode: bool, json_output: bool, verbosity: Ve
 
     // Find all current tracked files
     // Use Quiet verbosity for JSON output to avoid mixing stderr with JSON
+    let pattern_strings = config.pattern_strings();
     let scan_verbosity = if json_output { Verbosity::Quiet } else { verbosity };
     let current_files = scanner::scan_patterns_with_verbosity(
-        &config.tracked_files,
+        &pattern_strings,
         &config.exclude,
         scan_verbosity,
     )?;
@@ -1437,7 +1614,7 @@ fn cmd_remove(patterns: Vec<String>) -> anyhow::Result<()> {
     // Remove patterns
     let mut removed = 0;
     for pattern in &patterns {
-        if let Some(pos) = config.tracked_files.iter().position(|x| x == pattern) {
+        if let Some(pos) = config.tracked_files.iter().position(|x| x.path() == pattern) {
             config.tracked_files.remove(pos);
             println!("✓ Removed from tracking: {}", pattern);
             removed += 1;
@@ -1456,4 +1633,23 @@ fn cmd_remove(patterns: Vec<String>) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_tui() -> anyhow::Result<()> {
+    let config_path = dotmatrix::get_config_path()?;
+    let index_path = dotmatrix::get_index_path()?;
+
+    if !config_path.exists() {
+        println!("❌ No config file found. Run 'dotmatrix init' first.");
+        return Ok(());
+    }
+
+    let config = Config::load(&config_path)?;
+    let index = if index_path.exists() {
+        Index::load(&index_path)?
+    } else {
+        Index::new()
+    };
+
+    tui::run(config, index, config_path, index_path)
 }

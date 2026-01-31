@@ -26,12 +26,15 @@ src/
 ├── config.rs   # TOML config (tracked_files, exclude, backup_mode, git_enabled)
 ├── index.rs    # JSON index with FileEntry (path, hash, size, last_modified)
 ├── scanner.rs  # File discovery, SHA256 hashing, glob matching, Verbosity enum
+├── tui.rs      # Interactive TUI with ratatui (status, browse, add modes)
 └── main.rs     # CLI via clap, all command implementations
 ```
 
 ### Key Types
 
 - `Config` (config.rs) - TOML config with serde
+- `BackupMode` (config.rs) - Incremental or Archive mode
+- `TrackedPattern` (config.rs) - Simple string or object with path+mode override
 - `Index` / `FileEntry` (index.rs) - JSON file metadata database
 - `Verbosity` (scanner.rs) - Quiet/Normal/Verbose/Debug levels
 
@@ -54,6 +57,14 @@ src/
 - **incremental**: Files stored by SHA256 hash in `storage/{hash[0..2]}/{hash}`. Automatic deduplication.
 - **archive**: Compressed tarballs in `archives/` with timestamps.
 
+Per-pattern mode override via config:
+```toml
+tracked_files = [
+    "~/.bashrc",                               # Uses default mode
+    { path = "~/.config/nvim/**", mode = "archive" },  # Override
+]
+```
+
 ## Command Implementations
 
 All in `src/main.rs`:
@@ -64,10 +75,20 @@ All in `src/main.rs`:
 | add | `cmd_add()` | Shell expansion warning for >10 files |
 | remove | `cmd_remove()` | Updates config, prompts for scan |
 | scan | `cmd_scan()` | Orphan detection, interactive cleanup |
-| backup | `cmd_backup()` | Dispatches to `backup_incremental()` or `backup_archive()` |
-| restore | `cmd_restore()` | Comparison view, diff, safety backup, dry-run |
+| backup | `cmd_backup()` | Groups files by mode, dispatches to incremental/archive |
+| restore | `cmd_restore()` | Comparison view, diff, safety backup, --extract-to, --remap |
 | status | `cmd_status()` | Modified/new/deleted, quick mode, JSON output |
-| list | `cmd_list()` | Shows tracked patterns and excludes |
+| list | `cmd_list()` | Shows tracked patterns with modes |
+| tui | `cmd_tui()` | Interactive TUI via `tui::run()` |
+
+### TUI (tui.rs)
+
+Built with `ratatui` + `crossterm`. Three modes:
+- **Status**: View tracked files with modification status
+- **Browse**: Manage backup contents
+- **Add**: Browse common config paths to add
+
+Key types: `App` (state), `TuiMode`, `DisplayFile`, `FileStatus`
 
 ## Code Patterns
 
@@ -77,6 +98,7 @@ All in `src/main.rs`:
 - 8KB buffer for file hashing (`scanner::hash_file()`)
 - XDG compliance via `dirs` crate
 - Git operations via `std::process::Command`
+- TUI via `ratatui` with `crossterm` backend
 
 ## Design Principles
 

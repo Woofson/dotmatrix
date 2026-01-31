@@ -14,7 +14,10 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 - **Pattern matching**: Track entire directories or specific file patterns
 - **Exclude lists**: Ignore temporary files, logs, and other cruft
 - **Two backup modes**: Incremental (content-addressed) or archive (tarballs)
+- **Per-pattern modes**: Override backup mode for specific files/directories
 - **Safety-first restore**: Comparison view, diffs, and automatic safety backups
+- **Path remapping**: Restore to different locations for distro-hopping
+- **Interactive TUI**: Browse, manage, and add files with keyboard navigation
 - **CLI first**: Power user friendly with clean command structure
 
 ## Installation
@@ -59,13 +62,14 @@ Edit `~/.config/dotmatrix/config.toml`:
 
 ```toml
 git_enabled = true
-backup_mode = "incremental"  # or "archive"
+backup_mode = "incremental"  # default mode: "incremental" or "archive"
 
 tracked_files = [
     "~/.bashrc",
     "~/.zshrc",
     "~/.gitconfig",
-    "~/.config/nvim/**",
+    # Override mode per pattern
+    { path = "~/.config/nvim/**", mode = "archive" },
 ]
 
 exclude = [
@@ -80,6 +84,8 @@ exclude = [
 - **incremental**: Content-addressed storage with automatic deduplication. Best for frequent backups.
 - **archive**: Compressed tarballs with timestamps. Best for occasional snapshots.
 
+Patterns can override the default mode by using the object syntax with `path` and `mode` fields.
+
 ## Commands
 
 | Command | Description |
@@ -92,6 +98,7 @@ exclude = [
 | `restore [--dry-run]` | Restore files from backup |
 | `status` | Show changes since last backup |
 | `list` | List tracked patterns |
+| `tui` | Launch interactive TUI |
 
 ### Global Flags
 
@@ -107,6 +114,10 @@ dotmatrix restore --dry-run    # Preview only, no changes
 dotmatrix restore --diff       # Show file diffs
 dotmatrix restore --yes        # Auto-confirm (still creates safety backup)
 dotmatrix restore --file .bashrc  # Restore specific file
+
+# For distro-hopping or different environments:
+dotmatrix restore --extract-to ~/restored  # Extract to a directory
+dotmatrix restore --remap /home/old=/home/new  # Remap paths
 ```
 
 ### Status Options
@@ -117,6 +128,25 @@ dotmatrix status --all     # Include unchanged files
 dotmatrix status --quick   # Fast mode (size/mtime only)
 dotmatrix status --json    # JSON output for scripting
 ```
+
+### TUI Mode
+
+Launch the interactive terminal UI:
+
+```bash
+dotmatrix tui
+```
+
+**Key bindings:**
+- `j/k` or arrows: Navigate
+- `Tab`: Switch between Status/Browse/Add modes
+- `Space`: Toggle selection
+- `Enter`: Toggle tracking (add/remove pattern)
+- `a`: Add new pattern manually
+- `d`: Remove from index
+- `r`: Refresh
+- `?`: Help
+- `q`: Quit
 
 ## Directory Structure
 
