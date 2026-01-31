@@ -1,6 +1,6 @@
-# dotmatrix
+# Dot Matrix
 
-> *"I'm a Mog: half man, half dog. I'm my own best friend!"* - Barf, Spaceballs
+> *"We'll have none if that mister! How far did he get? What'd he touch?"* - Dot Matrix, Spaceballs
 
 A dotfile management and versioning tool that indexes your configuration files where they live, without the symlink madness.
 
@@ -196,4 +196,3 @@ MIT License - See LICENSE file for details
 
 ---
 
-*"What's the matter, Colonel Sandurz? Chicken?"*
