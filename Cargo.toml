@@ -1,6 +1,6 @@
 [package]
 name = "dotmatrix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Woofson <https://github.com/Woofson>"]
 description = "Dotfile management and versioning tool"

@@ -1,4 +1,4 @@
-.TH DOTMATRIX 1 "January 2026" "dotmatrix 0.1.0" "User Commands"
+.TH DOTMATRIX 1 "January 2026" "dotmatrix 0.2.0" "User Commands"
 .SH NAME
 dotmatrix \- dotfile management and versioning tool
 .SH SYNOPSIS
@@ -77,6 +77,51 @@ Quick mode: compare by size/mtime only (skip hash calculation).
 Output in JSON format for scripting.
 .SS list
 List all tracked file patterns and exclude patterns.
+.SS tui
+Launch interactive terminal user interface with three modes:
+.TP
+.B Status
+View tracked files with modification status
+.TP
+.B Browse
+Manage backup contents
+.TP
+.B Add
+File browser to add new patterns
+.PP
+.B Key bindings:
+.RS
+.TP
+.B j/k, Up/Down
+Navigate file list
+.TP
+.B Tab
+Switch between modes
+.TP
+.B Enter/l
+Enter directory (Add mode) or toggle tracking
+.TP
+.B Backspace/h
+Parent directory (Add mode)
+.TP
+.B ~
+Go to home directory (Add mode)
+.TP
+.B Space
+Toggle selection
+.TP
+.B a
+Add pattern manually
+.TP
+.B d
+Remove selected from index
+.TP
+.B ?
+Show help
+.TP
+.B q
+Quit
+.RE
 .SH CONFIGURATION
 Configuration is stored in \fI~/.config/dotmatrix/config.toml\fR:
 .PP

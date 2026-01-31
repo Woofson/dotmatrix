@@ -137,16 +137,24 @@ Launch the interactive terminal UI:
 dotmatrix tui
 ```
 
+**Three modes** (switch with `Tab`):
+- **Status**: View tracked files with modification status
+- **Browse**: Manage backup contents
+- **Add**: File browser to navigate and add patterns
+
 **Key bindings:**
-- `j/k` or arrows: Navigate
-- `Tab`: Switch between Status/Browse/Add modes
-- `Space`: Toggle selection
-- `Enter`: Toggle tracking (add/remove pattern)
-- `a`: Add new pattern manually
-- `d`: Remove from index
-- `r`: Refresh
-- `?`: Help
-- `q`: Quit
+| Key | Action |
+|-----|--------|
+| `j/k`, arrows | Navigate |
+| `Tab` | Switch modes |
+| `Enter`/`l` | Enter directory (Add) / Toggle tracking |
+| `Backspace`/`h` | Parent directory (Add mode) |
+| `~` | Go to home (Add mode) |
+| `Space` | Toggle selection |
+| `a` | Add pattern manually |
+| `d` | Remove from index |
+| `?` | Help |
+| `q` | Quit |
 
 ## Directory Structure
 
