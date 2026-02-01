@@ -1,6 +1,6 @@
 # Dot Matrix
 
-> *"We'll have none if that mister! How far did he get? What'd he touch?"* - Dot Matrix, Spaceballs
+> *"We'll have none of that mister! How far did he get? What'd he touch?"* - Dot Matrix, Spaceballs
 
 A dotfile management and versioning tool that indexes your configuration files where they live, without the symlink madness.
 
