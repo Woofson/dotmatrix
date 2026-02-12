@@ -9,7 +9,8 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 ## Features
 
 - **Index in place**: Track dotfiles where they live, no symlinks needed
-- **XDG compliant**: Follows Linux standards for config and data directories
+- **Cross-platform**: Works on Linux, macOS, and Windows
+- **Configurable storage**: Custom backup location via `data_dir` in config
 - **Git-based versioning**: Full history of your dotfiles with commit messages
 - **Pattern matching**: Track entire directories or specific file patterns
 - **Exclude lists**: Ignore temporary files, logs, and other cruft
@@ -17,7 +18,7 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 - **Per-pattern modes**: Override backup mode for specific files/directories
 - **Safety-first restore**: Comparison view, diffs, and automatic safety backups
 - **Path remapping**: Restore to different locations for distro-hopping
-- **Interactive TUI**: Browse, manage, and add files with keyboard navigation
+- **Interactive TUI**: Browse, backup, and restore with keyboard navigation
 - **CLI first**: Power user friendly with clean command structure
 
 ## Installation
@@ -61,6 +62,10 @@ dotmatrix restore
 Edit `~/.config/dotmatrix/config.toml`:
 
 ```toml
+# Optional: Custom backup location (defaults to system data directory)
+# data_dir = "~/Dropbox/dotmatrix"  # Sync via cloud
+# data_dir = "D:/Backups/dotmatrix"  # Windows example
+
 git_enabled = true
 backup_mode = "incremental"  # default mode: "incremental" or "archive"
 
@@ -68,6 +73,7 @@ tracked_files = [
     "~/.bashrc",
     "~/.zshrc",
     "~/.gitconfig",
+    "~/.config/dotmatrix/*",  # Track dotmatrix's own config
     # Override mode per pattern
     { path = "~/.config/nvim/**", mode = "archive" },
 ]
@@ -85,6 +91,14 @@ exclude = [
 - **archive**: Compressed tarballs with timestamps. Best for occasional snapshots.
 
 Patterns can override the default mode by using the object syntax with `path` and `mode` fields.
+
+### Default Paths
+
+| Platform | Config | Data |
+|----------|--------|------|
+| Linux | `~/.config/dotmatrix/` | `~/.local/share/dotmatrix/` |
+| macOS | `~/Library/Application Support/dotmatrix/` | Same |
+| Windows | `%APPDATA%\dotmatrix\` | `%LOCALAPPDATA%\dotmatrix\` |
 
 ## Commands
 
@@ -137,24 +151,36 @@ Launch the interactive terminal UI:
 dotmatrix tui
 ```
 
-**Three modes** (switch with `Tab`):
-- **Status**: View tracked files with modification status
-- **Browse**: Manage backup contents
-- **Add**: File browser to navigate and add patterns
+**Three tabs** (switch with `Tab`):
+- **Tracked Files**: View your backed-up files and their status
+- **Add Files**: Browse your computer to add files to tracking
+- **Restore**: Browse backup history and restore files
 
 **Key bindings:**
 | Key | Action |
 |-----|--------|
 | `j/k`, arrows | Navigate |
-| `Tab` | Switch modes |
-| `Enter`/`l` | Enter directory (Add) / Toggle tracking |
-| `Backspace`/`h` | Parent directory (Add mode) |
-| `~` | Go to home (Add mode) |
-| `Space` | Toggle selection |
-| `a` | Add pattern manually |
-| `d` | Remove from index |
+| `Tab` | Next tab |
+| `b` | Run backup (Tracked Files tab) |
+| `Enter` | Add file / Select backup / Restore |
+| `Backspace` | Go back / Parent directory |
+| `~` | Go to home (Add Files tab) |
+| `Space` | Select multiple items |
+| `a` | Type a path manually |
+| `d` | Stop tracking file |
 | `?` | Help |
-| `q` | Quit |
+| `q` | Quit (saves changes) |
+
+**Status symbols** (Tracked Files tab):
+- ` ` (space) = Backed up and unchanged
+- `M` = Modified since last backup
+- `+` = New, not yet backed up
+- `-` = Deleted from your system
+
+**Restore symbols**:
+- `NEW` = File missing locally
+- `CHG` = Local file differs from backup
+- `OK` = Matches backup
 
 ## Directory Structure
 
