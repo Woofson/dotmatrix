@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-02-12
+
+### TUI Help Improvements
+- Help window now scrollable with Up/Down/j/k/PageUp/PageDown
+- Added [I] and [A] mode indicator explanations
+- Expanded restore symbols section (NEW/CHG/OK)
+- Any non-scroll key closes help
+
 ## [0.3.1] - 2026-02-12
 
 ### TUI Usability Improvements
