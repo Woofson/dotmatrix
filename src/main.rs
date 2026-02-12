@@ -250,6 +250,9 @@ fn cmd_init() -> anyhow::Result<()> {
     println!("   Config directory: {}", config_dir.display());
     println!("   Data directory: {}", data_dir.display());
     println!("   Storage directory: {}", storage_path.display());
+    println!("\n📋 Backup modes available:");
+    println!("   • incremental - Content-addressed storage with deduplication (default)");
+    println!("   • archive     - Compressed tarball snapshots");
     println!("\nNext steps:");
     println!("   1. Edit your config: {}", config_path.display());
     println!("   2. Run 'dotmatrix scan' to index your files");

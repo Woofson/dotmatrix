@@ -99,6 +99,7 @@ impl Default for Config {
                 TrackedPattern::Simple("~/.bashrc".to_string()),
                 TrackedPattern::Simple("~/.zshrc".to_string()),
                 TrackedPattern::Simple("~/.gitconfig".to_string()),
+                TrackedPattern::Simple("~/.config/dotmatrix/*".to_string()),
             ],
             exclude: vec![
                 "**/*.log".to_string(),

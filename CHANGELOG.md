@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `init` command now displays available backup modes (incremental, archive) with descriptions
+- Default config now includes `~/.config/dotmatrix/*` in tracked files (self-tracking)
+
 ### Project Inception - 2026-01-30
 
 #### Session 1: Project Setup (Morning)
