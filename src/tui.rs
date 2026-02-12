@@ -24,13 +24,13 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiMode {
     Status,   // View status of tracked files
-    Browse,   // Browse and manage backup
+    Browse,   // Browse and restore from backup
     Add,      // Add new files to tracking
 }
 
 impl TuiMode {
     fn titles() -> Vec<&'static str> {
-        vec!["Status", "Browse", "Add"]
+        vec!["Backup Status", "Restore", "Add Files"]
     }
 
     fn index(&self) -> usize {
@@ -794,18 +794,18 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let title = match app.mode {
-        TuiMode::Status => " Tracked Files (Status) ".to_string(),
-        TuiMode::Browse => " Backup Contents ".to_string(),
+        TuiMode::Status => " Your Monitored Files - Shows what's backed up and any changes ".to_string(),
+        TuiMode::Browse => " Restore Files - Select files to restore from backup ".to_string(),
         TuiMode::Add => {
-            // Show current path in Add mode
+            // Show current path in Add mode with hint
             let path_display = if let Some(home) = dirs::home_dir() {
                 if let Ok(rel) = app.browse_dir.strip_prefix(&home) {
-                    format!(" ~/{} ", rel.display())
+                    format!(" Browse: ~/{} - Press Enter to add files to backup ", rel.display())
                 } else {
-                    format!(" {} ", app.browse_dir.display())
+                    format!(" Browse: {} - Press Enter to add files to backup ", app.browse_dir.display())
                 }
             } else {
-                format!(" {} ", app.browse_dir.display())
+                format!(" Browse: {} - Press Enter to add files to backup ", app.browse_dir.display())
             };
             path_display
         }
@@ -826,36 +826,38 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
 fn render_help(f: &mut Frame, area: Rect) {
     let help_text = vec![
         "",
-        "  Navigation",
-        "  ----------",
-        "  j/Down      Move down",
-        "  k/Up        Move up",
-        "  g           Go to top",
-        "  G           Go to bottom",
-        "  Tab         Next mode",
-        "  Shift+Tab   Previous mode",
+        "  WHAT EACH TAB DOES",
+        "  ==================",
+        "  Backup Status  See your monitored files and their backup state",
+        "  Restore        Browse backups and restore files to your system",
+        "  Add Files      Browse your system to add new files to backup",
         "",
-        "  Add Mode (File Browser)",
-        "  -----------------------",
-        "  Enter/l     Enter directory",
-        "  Backspace/h Parent directory",
-        "  ~           Go to home",
+        "  STATUS SYMBOLS",
+        "  ==============",
+        "  (space) = File is backed up and unchanged",
+        "  M       = File was Modified since last backup",
+        "  +       = New file, not yet backed up",
+        "  -       = File was Deleted from your system",
         "",
-        "  Actions",
-        "  -------",
-        "  Space       Toggle selection",
-        "  Ctrl+a      Select/deselect all",
-        "  Enter       Toggle tracking / Enter dir",
-        "  a           Add pattern manually",
-        "  d/Delete    Remove from index",
-        "  r           Refresh list",
+        "  NAVIGATION",
+        "  ==========",
+        "  j/Down      Move down          Tab         Next tab",
+        "  k/Up        Move up            Shift+Tab   Previous tab",
+        "  g           Go to top          ?/F1        Show this help",
+        "  G           Go to bottom       q           Quit",
         "",
-        "  Other",
-        "  -----",
-        "  ?/F1        Show this help",
-        "  q           Quit",
+        "  ADD FILES TAB",
+        "  =============",
+        "  Enter/l     Enter directory    a           Add pattern manually",
+        "  Backspace/h Parent directory   ~           Go to home",
         "",
-        "  Status: (space)=ok M=modified +=new -=del",
+        "  ACTIONS",
+        "  =======",
+        "  Space       Select/deselect file(s)",
+        "  Ctrl+a      Select all / Deselect all",
+        "  Enter       Add to backup (Add tab) / Enter dir",
+        "  d/Delete    Remove from backup tracking",
+        "  r           Refresh file list",
         "",
         "  Press any key to close",
     ];
@@ -881,7 +883,7 @@ fn render_add_input(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Add Pattern (Enter to confirm, Esc to cancel) "),
+                .title(" Add files/folders to backup (Enter to confirm, Esc to cancel) "),
         )
         .style(Style::default().fg(Color::Yellow));
 
@@ -889,10 +891,12 @@ fn render_add_input(f: &mut Frame, area: Rect, app: &App) {
 
     let hints = [
         "",
-        "  Examples:",
-        "    ~/.bashrc           Single file",
-        "    ~/.config/nvim/**   All files recursively",
-        "    /etc/nginx/*.conf   Glob pattern",
+        "  Type a path to add to your backup:",
+        "",
+        "    ~/.bashrc             Add a single file",
+        "    ~/.config/nvim/**     Add all files in folder (recursive)",
+        "    ~/.config/nvim/*      Add files in folder (not recursive)",
+        "    /etc/nginx/*.conf     Add all .conf files in a folder",
         "",
     ];
 
@@ -911,15 +915,21 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         let selected_count = app.selected.len();
         let total = app.files.len();
 
+        let mode_hint = match app.mode {
+            TuiMode::Status => "Viewing backup status",
+            TuiMode::Browse => "Select files to restore",
+            TuiMode::Add => "Browse and add files to backup",
+        };
+
         if selected_count > 0 {
             format!(
-                " {} selected | {} total | Tab: switch mode | ?: help | q: quit",
-                selected_count, total
+                " {} selected | {} total | {} | Tab: switch tab | ?: help | q: quit",
+                selected_count, total, mode_hint
             )
         } else {
             format!(
-                " {} files | Tab: switch mode | ?: help | q: quit",
-                total
+                " {} files | {} | Tab: switch tab | ?: help | q: quit",
+                total, mode_hint
             )
         }
     };
