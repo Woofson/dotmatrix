@@ -1,4 +1,4 @@
-.TH DOTMATRIX 1 "January 2026" "dotmatrix 0.2.0" "User Commands"
+.TH DOTMATRIX 1 "February 2026" "dotmatrix 0.3.1" "User Commands"
 .SH NAME
 dotmatrix \- dotfile management and versioning tool
 .SH SYNOPSIS
@@ -8,9 +8,11 @@ dotmatrix \- dotfile management and versioning tool
 [\fIoptions\fR]
 .SH DESCRIPTION
 .B dotmatrix
-is a dotfile management tool that indexes configuration files where they live,
+is a cross-platform dotfile management tool that indexes configuration files where they live,
 without using symlinks. It provides version control through git integration
 and supports two backup modes: incremental (content-addressed) and archive (tarballs).
+.PP
+Works on Linux, macOS, and Windows.
 .SH GLOBAL OPTIONS
 .TP
 .BR \-v ", " \-\-verbose
@@ -78,16 +80,16 @@ Output in JSON format for scripting.
 .SS list
 List all tracked file patterns and exclude patterns.
 .SS tui
-Launch interactive terminal user interface with three modes:
+Launch interactive terminal user interface with three tabs:
 .TP
-.B Status
-View tracked files with modification status
+.B Tracked Files
+View your backed-up files and their status. Press \fBb\fR to run a backup.
 .TP
-.B Browse
-Manage backup contents
+.B Add Files
+Browse your computer to add files to tracking.
 .TP
-.B Add
-File browser to add new patterns
+.B Restore
+Browse backup history and restore files from previous backups.
 .PP
 .B Key bindings:
 .RS
@@ -96,43 +98,79 @@ File browser to add new patterns
 Navigate file list
 .TP
 .B Tab
-Switch between modes
+Switch between tabs
 .TP
-.B Enter/l
-Enter directory (Add mode) or toggle tracking
+.B b
+Run backup (Tracked Files tab)
 .TP
-.B Backspace/h
-Parent directory (Add mode)
+.B Enter
+Add file / Select backup / Restore file(s)
+.TP
+.B Backspace
+Go back / Parent directory
 .TP
 .B ~
-Go to home directory (Add mode)
+Go to home directory (Add Files tab)
 .TP
 .B Space
-Toggle selection
+Select multiple items
 .TP
 .B a
-Add pattern manually
+Type a path manually
 .TP
 .B d
-Remove selected from index
+Stop tracking file
 .TP
 .B ?
 Show help
 .TP
 .B q
-Quit
+Quit (saves changes)
+.RE
+.PP
+.B Status symbols (Tracked Files tab):
+.RS
+.TP
+.B " " (space)
+Backed up and unchanged
+.TP
+.B M
+Modified since last backup
+.TP
+.B +
+New, not yet backed up
+.TP
+.B \-
+Deleted from your system
+.RE
+.PP
+.B Restore symbols:
+.RS
+.TP
+.B NEW
+File missing locally
+.TP
+.B CHG
+Local file differs from backup
+.TP
+.B OK
+Matches backup
 .RE
 .SH CONFIGURATION
-Configuration is stored in \fI~/.config/dotmatrix/config.toml\fR:
+Configuration is stored in the config directory (see FILES section):
 .PP
 .RS
 .nf
+# Optional: Custom backup location
+# data_dir = "~/Dropbox/dotmatrix"
+
 git_enabled = true
 backup_mode = "incremental"  # or "archive"
 
 tracked_files = [
     "~/.bashrc",
     "~/.config/nvim/**",
+    "~/.config/dotmatrix/*",
 ]
 
 exclude = [
@@ -151,21 +189,42 @@ Provides automatic deduplication. Best for frequent backups.
 Files are stored as compressed tarballs with timestamps.
 Best for occasional snapshots.
 .SH FILES
+Default paths vary by platform:
+.SS Linux
 .TP
 .I ~/.config/dotmatrix/config.toml
 Configuration file.
 .TP
-.I ~/.local/share/dotmatrix/index.json
+.I ~/.local/share/dotmatrix/
+Data directory (index, storage, archives, git).
+.SS macOS
+.TP
+.I ~/Library/Application Support/dotmatrix/config.toml
+Configuration file.
+.TP
+.I ~/Library/Application Support/dotmatrix/
+Data directory.
+.SS Windows
+.TP
+.I %APPDATA%\\dotmatrix\\config.toml
+Configuration file.
+.TP
+.I %LOCALAPPDATA%\\dotmatrix\\
+Data directory.
+.SS Data Directory Contents
+.TP
+.I index.json
 File metadata index.
 .TP
-.I ~/.local/share/dotmatrix/storage/
+.I storage/
 Content-addressed backup storage (incremental mode).
 .TP
-.I ~/.local/share/dotmatrix/archives/
+.I archives/
 Tarball backup storage (archive mode).
 .TP
-.I ~/.local/share/dotmatrix/.git/
+.I .git/
 Git repository for version control.
+.SS Other
 .TP
 .I ~/.dotmatrix-restore-backup-*/
 Safety backups created before restore operations.
@@ -181,6 +240,8 @@ supports glob patterns for file matching:
 ~/.config/**/*.lua     # All .lua files recursively
 .fi
 .RE
+.PP
+The \fB~\fR prefix expands to the user's home directory on all platforms.
 .SH EXAMPLES
 .SS Basic workflow
 .PP
@@ -210,6 +271,15 @@ dotmatrix restore
 .RS
 .nf
 dotmatrix restore --dry-run --diff
+.fi
+.RE
+.SS Custom backup location
+.PP
+.RS
+.nf
+# In config.toml:
+data_dir = "D:/Backups/dotmatrix"  # Windows
+data_dir = "~/Dropbox/dotmatrix"   # Sync via cloud
 .fi
 .RE
 .SS Verbose output
