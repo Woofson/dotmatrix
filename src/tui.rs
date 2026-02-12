@@ -135,6 +135,7 @@ pub struct App {
     pub message: Option<String>,
     pub should_quit: bool,
     pub show_help: bool,
+    pub help_scroll: u16,  // Scroll position for help window
     pub add_input: String,
     pub add_mode: bool,
     pub browse_dir: PathBuf,  // Current directory for Add mode file browser
@@ -164,6 +165,7 @@ impl App {
             message: None,
             should_quit: false,
             show_help: false,
+            help_scroll: 0,
             add_input: String::new(),
             add_mode: false,
             browse_dir: home,
@@ -901,7 +903,28 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
             app.message = None;
 
             if app.show_help {
-                app.show_help = false;
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.help_scroll = app.help_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.help_scroll = app.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown => {
+                        app.help_scroll = app.help_scroll.saturating_add(10);
+                    }
+                    KeyCode::PageUp => {
+                        app.help_scroll = app.help_scroll.saturating_sub(10);
+                    }
+                    KeyCode::Home | KeyCode::Char('g') => {
+                        app.help_scroll = 0;
+                    }
+                    _ => {
+                        // Any other key closes help
+                        app.show_help = false;
+                        app.help_scroll = 0;
+                    }
+                }
                 continue;
             }
 
@@ -1096,7 +1119,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     // Main content
     if app.show_help {
-        render_help(f, chunks[1]);
+        render_help(f, chunks[1], app.help_scroll);
     } else if app.add_mode {
         render_add_input(f, chunks[1], app);
     } else {
@@ -1335,7 +1358,7 @@ fn render_restore_view(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn render_help(f: &mut Frame, area: Rect) {
+fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
     let help_text = vec![
         "",
         "  WHAT EACH TAB DOES",
@@ -1350,6 +1373,11 @@ fn render_help(f: &mut Frame, area: Rect) {
         "  M       = Modified since last backup",
         "  +       = New, not yet backed up",
         "  -       = Deleted from your system",
+        "",
+        "  MODE INDICATORS",
+        "  ===============",
+        "  [I]      = Incremental backup mode (content-addressed, deduped)",
+        "  [A]      = Archive backup mode (compressed tarball)",
         "",
         "  NAVIGATION",
         "  ==========",
@@ -1375,18 +1403,23 @@ fn render_help(f: &mut Frame, area: Rect) {
         "  Enter       Select backup / Restore file(s)",
         "  Backspace   Go back to backup list",
         "  Space       Select multiple files",
-        "  Symbols: NEW=missing, CHG=changed, OK=matches backup",
-        "  ~           Go to home",
+        "",
+        "  RESTORE SYMBOLS",
+        "  ===============",
+        "  NEW       = File missing locally (will be created)",
+        "  CHG       = Local file differs from backup",
+        "  OK        = Local file matches backup",
         "",
         "  Note: Changes are saved when you quit (q)",
         "",
-        "  Press any key to close",
+        "  Scroll: Up/Down/j/k  |  Press any other key to close",
     ];
 
     let text: Vec<Line> = help_text.iter().map(|s| Line::from(*s)).collect();
     let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" Help "))
-        .style(Style::default().fg(Color::White));
+        .block(Block::default().borders(Borders::ALL).title(" Help (scroll with arrows) "))
+        .style(Style::default().fg(Color::White))
+        .scroll((scroll, 0));
 
     f.render_widget(paragraph, area);
 }
