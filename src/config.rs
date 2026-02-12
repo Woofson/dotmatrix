@@ -83,6 +83,12 @@ fn default_backup_mode() -> BackupMode {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
+    /// Custom data directory path (optional, defaults to system data dir)
+    /// On Linux: ~/.local/share/dotmatrix
+    /// On Windows: C:\Users\<User>\AppData\Local\dotmatrix
+    /// On macOS: ~/Library/Application Support/dotmatrix
+    #[serde(default)]
+    pub data_dir: Option<String>,
     pub git_enabled: bool,
     #[serde(default = "default_backup_mode")]
     pub backup_mode: BackupMode,
@@ -92,15 +98,26 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        // Platform-specific default tracked files
+        #[cfg(windows)]
+        let default_tracked = vec![
+            TrackedPattern::Simple("~/.gitconfig".to_string()),
+            TrackedPattern::Simple("~/AppData/Local/dotmatrix/*".to_string()),
+        ];
+
+        #[cfg(not(windows))]
+        let default_tracked = vec![
+            TrackedPattern::Simple("~/.bashrc".to_string()),
+            TrackedPattern::Simple("~/.zshrc".to_string()),
+            TrackedPattern::Simple("~/.gitconfig".to_string()),
+            TrackedPattern::Simple("~/.config/dotmatrix/*".to_string()),
+        ];
+
         Config {
+            data_dir: None,  // Use system default
             git_enabled: true,
             backup_mode: BackupMode::Incremental,
-            tracked_files: vec![
-                TrackedPattern::Simple("~/.bashrc".to_string()),
-                TrackedPattern::Simple("~/.zshrc".to_string()),
-                TrackedPattern::Simple("~/.gitconfig".to_string()),
-                TrackedPattern::Simple("~/.config/dotmatrix/*".to_string()),
-            ],
+            tracked_files: default_tracked,
             exclude: vec![
                 "**/*.log".to_string(),
                 "**/.DS_Store".to_string(),
@@ -108,6 +125,19 @@ impl Default for Config {
             ],
         }
     }
+}
+
+/// Expand ~ to home directory (works on all platforms)
+pub fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") || path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            if path == "~" {
+                return home;
+            }
+            return home.join(&path[2..]);
+        }
+    }
+    PathBuf::from(path)
 }
 
 impl Config {
@@ -127,6 +157,12 @@ impl Config {
         let content = toml::to_string_pretty(&self)?;
         fs::write(path, content)?;
         Ok(())
+    }
+
+    /// Get the expanded data directory path
+    /// Returns None if using system default, Some(path) if custom
+    pub fn get_data_dir(&self) -> Option<PathBuf> {
+        self.data_dir.as_ref().map(|p| expand_path(p))
     }
 
     /// Get all pattern strings (for backward compatibility)

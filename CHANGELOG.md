@@ -7,9 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-12
+
+### TUI Usability Improvements
+- Renamed "Backup Status" tab to "Tracked Files" for clarity
+- Renamed "Add Files" tab to just "Add Files" with clearer descriptions
+- Reordered tabs: Tracked Files → Add Files → Restore (more intuitive workflow)
+- Updated all help text to use beginner-friendly language
+- Panel titles now explain what to do, not just what you're seeing
+- Status bar hints simplified and made more actionable
+
+## [0.3.0] - 2026-02-12
+
 ### Changed
 - `init` command now displays available backup modes (incremental, archive) with descriptions
 - Default config now includes `~/.config/dotmatrix/*` in tracked files (self-tracking)
+
+### TUI Improvements
+- Renamed tabs for clarity: "Status" → "Backup Status", "Browse" → "Restore", "Add" → "Add Files"
+- Added descriptive panel titles explaining what each view shows
+- Added context-aware hints in status bar for each mode
+- Reorganized help screen with clear sections explaining tabs and symbols
+- **Fixed:** Enter key no longer removes files from tracking in Backup Status mode
+- **Added:** Press `b` in Backup Status to run backup with auto-generated timestamp commit message (format: `Backup YYYY-MM-DD HH:MM:SS`)
+- **Added:** Config changes now saved only on exit (not immediately), allowing dotmatrix config to be backed up properly
+- **Added:** `config_dirty` and `index_dirty` flags to track unsaved changes
+
+### Restore Functionality (TUI)
+- **Added:** Full restore functionality in the Restore tab
+- Restore tab now shows git commit history with hash, date, and commit message
+- Select a backup to view all files that were included in that backup
+- Files show status: `NEW` (doesn't exist locally), `CHG` (local file differs), `OK` (matches backup)
+- Select individual files or use Space to select multiple files for restore
+- Press Enter to restore selected files from backup storage
+- Press Backspace to go back from file list to commit list
+- Files are restored from content-addressed storage using their hash
+
+### Cross-Platform & Configuration
+- **Added:** Configurable `data_dir` in config.toml for custom backup location
+- **Added:** Windows support - paths now work correctly on all platforms
+- **Added:** `expand_path()` function for cross-platform ~ expansion
+- **Added:** Platform-specific default tracked files (Windows vs Unix)
+- **Added:** `get_data_dir_with_config()` and related helpers for explicit config passing
+- **Fixed:** TUI backup now uses current executable path instead of assuming PATH
 
 ### Project Inception - 2026-01-30
 

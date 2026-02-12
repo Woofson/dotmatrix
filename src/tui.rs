@@ -24,28 +24,28 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiMode {
     Status,   // View status of tracked files
-    Browse,   // Browse and restore from backup
     Add,      // Add new files to tracking
+    Browse,   // Browse and restore from backup
 }
 
 impl TuiMode {
     fn titles() -> Vec<&'static str> {
-        vec!["Backup Status", "Restore", "Add Files"]
+        vec!["Tracked Files", "Add Files", "Restore"]
     }
 
     fn index(&self) -> usize {
         match self {
             TuiMode::Status => 0,
-            TuiMode::Browse => 1,
-            TuiMode::Add => 2,
+            TuiMode::Add => 1,
+            TuiMode::Browse => 2,
         }
     }
 
     fn from_index(i: usize) -> Self {
         match i {
             0 => TuiMode::Status,
-            1 => TuiMode::Browse,
-            _ => TuiMode::Add,
+            1 => TuiMode::Add,
+            _ => TuiMode::Browse,
         }
     }
 }
@@ -72,6 +72,15 @@ pub enum FileStatus {
     Untracked,
 }
 
+/// Git commit info for restore view
+#[derive(Debug, Clone)]
+pub struct GitCommit {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub date: String,
+}
+
 impl FileStatus {
     fn symbol(&self) -> &'static str {
         match self {
@@ -94,6 +103,24 @@ impl FileStatus {
     }
 }
 
+/// Restore view state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreView {
+    Commits,     // Viewing commit list
+    Files,       // Viewing files from selected commit
+}
+
+/// File entry for restore (from a specific commit)
+#[derive(Debug, Clone)]
+pub struct RestoreFile {
+    pub path: PathBuf,
+    pub display_path: String,
+    pub hash: String,
+    pub size: u64,
+    pub exists_locally: bool,
+    pub local_differs: bool,  // True if local file has different hash
+}
+
 /// TUI application state
 pub struct App {
     pub mode: TuiMode,
@@ -104,16 +131,25 @@ pub struct App {
     pub index: Index,
     pub config_path: PathBuf,
     pub index_path: PathBuf,
+    pub data_dir: PathBuf,
     pub message: Option<String>,
     pub should_quit: bool,
     pub show_help: bool,
     pub add_input: String,
     pub add_mode: bool,
     pub browse_dir: PathBuf,  // Current directory for Add mode file browser
+    pub config_dirty: bool,   // Track if config needs saving on exit
+    pub index_dirty: bool,    // Track if index needs saving on exit
+    pub commits: Vec<GitCommit>,  // Git commit history for restore
+    // Restore state
+    pub restore_view: RestoreView,
+    pub selected_commit: Option<usize>,  // Index into commits
+    pub restore_files: Vec<RestoreFile>, // Files from selected commit
+    pub restore_list_state: ListState,   // Separate list state for restore
 }
 
 impl App {
-    pub fn new(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf) -> Self {
+    pub fn new(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf, data_dir: PathBuf) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let mut app = App {
             mode: TuiMode::Status,
@@ -124,18 +160,241 @@ impl App {
             index,
             config_path,
             index_path,
+            data_dir,
             message: None,
             should_quit: false,
             show_help: false,
             add_input: String::new(),
             add_mode: false,
             browse_dir: home,
+            config_dirty: false,
+            index_dirty: false,
+            commits: Vec::new(),
+            restore_view: RestoreView::Commits,
+            selected_commit: None,
+            restore_files: Vec::new(),
+            restore_list_state: ListState::default(),
         };
         app.refresh_files();
+        app.load_commits();
         if !app.files.is_empty() {
             app.list_state.select(Some(0));
         }
         app
+    }
+
+    /// Load git commit history
+    fn load_commits(&mut self) {
+        self.commits.clear();
+
+        let output = std::process::Command::new("git")
+            .args(["log", "--pretty=format:%H|%h|%s|%ci", "-20"])
+            .current_dir(&self.data_dir)
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.splitn(4, '|').collect();
+                    if parts.len() == 4 {
+                        self.commits.push(GitCommit {
+                            hash: parts[0].to_string(),
+                            short_hash: parts[1].to_string(),
+                            message: parts[2].to_string(),
+                            date: parts[3].to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Save config and index if dirty (call on exit)
+    pub fn save_if_dirty(&mut self) -> Result<()> {
+        if self.config_dirty {
+            self.config.save(&self.config_path)?;
+            self.config_dirty = false;
+        }
+        if self.index_dirty {
+            self.index.save(&self.index_path)?;
+            self.index_dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Select a commit and load its files for restore
+    pub fn select_commit(&mut self) {
+        if let Some(i) = self.restore_list_state.selected() {
+            if i < self.commits.len() {
+                self.selected_commit = Some(i);
+                self.load_commit_files(&self.commits[i].hash.clone());
+                self.restore_view = RestoreView::Files;
+                self.restore_list_state.select(Some(0));
+            }
+        }
+    }
+
+    /// Go back to commit list
+    pub fn back_to_commits(&mut self) {
+        self.restore_view = RestoreView::Commits;
+        self.selected_commit = None;
+        self.restore_files.clear();
+        self.selected.clear();
+        // Restore selection to the commit we were viewing
+        if !self.commits.is_empty() {
+            self.restore_list_state.select(Some(0));
+        }
+    }
+
+    /// Load files from a specific commit's index
+    fn load_commit_files(&mut self, commit_hash: &str) {
+        self.restore_files.clear();
+
+        // Get index.json content at this commit
+        let output = std::process::Command::new("git")
+            .args(["show", &format!("{}:index.json", commit_hash)])
+            .current_dir(&self.data_dir)
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let content = String::from_utf8_lossy(&output.stdout);
+                if let Ok(index) = serde_json::from_str::<Index>(&content) {
+                    for (path, entry) in index.files {
+                        let display_path = if let Some(home) = dirs::home_dir() {
+                            if let Ok(rel) = path.strip_prefix(&home) {
+                                format!("~/{}", rel.display())
+                            } else {
+                                path.display().to_string()
+                            }
+                        } else {
+                            path.display().to_string()
+                        };
+
+                        // Check if file exists locally and if it differs
+                        let exists_locally = path.exists();
+                        let local_differs = if exists_locally {
+                            // Calculate local file hash
+                            if let Ok(local_hash) = self.hash_file(&path) {
+                                local_hash != entry.hash
+                            } else {
+                                true // Can't read = differs
+                            }
+                        } else {
+                            true // Doesn't exist = differs
+                        };
+
+                        self.restore_files.push(RestoreFile {
+                            path,
+                            display_path,
+                            hash: entry.hash,
+                            size: entry.size,
+                            exists_locally,
+                            local_differs,
+                        });
+                    }
+
+                    // Sort by path
+                    self.restore_files.sort_by(|a, b| a.display_path.cmp(&b.display_path));
+                }
+            } else {
+                self.message = Some("Failed to load commit index".to_string());
+            }
+        }
+    }
+
+    /// Hash a file (for comparison)
+    fn hash_file(&self, path: &Path) -> Result<String> {
+        use sha2::{Sha256, Digest};
+        use std::io::Read;
+
+        let mut file = fs::File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// Restore selected files from the selected commit
+    pub fn perform_restore(&mut self) {
+        let indices: Vec<usize> = if self.selected.is_empty() {
+            // If nothing selected, restore the currently highlighted file
+            self.restore_list_state.selected().into_iter().collect()
+        } else {
+            self.selected.iter().cloned().collect()
+        };
+
+        if indices.is_empty() {
+            self.message = Some("No files selected for restore".to_string());
+            return;
+        }
+
+        let storage_path = match crate::get_storage_path() {
+            Ok(p) => p,
+            Err(e) => {
+                self.message = Some(format!("Error getting storage path: {}", e));
+                return;
+            }
+        };
+
+        let mut restored = 0;
+        let mut errors = 0;
+
+        for i in indices {
+            if i >= self.restore_files.len() {
+                continue;
+            }
+
+            let file = &self.restore_files[i];
+
+            // Get backup file from storage
+            let hash = &file.hash;
+            let backup_path = storage_path.join(&hash[0..2]).join(hash);
+
+            if !backup_path.exists() {
+                errors += 1;
+                continue;
+            }
+
+            // Create parent directory if needed
+            if let Some(parent) = file.path.parent() {
+                if !parent.exists() {
+                    if let Err(_) = fs::create_dir_all(parent) {
+                        errors += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Copy from storage to destination
+            match fs::copy(&backup_path, &file.path) {
+                Ok(_) => restored += 1,
+                Err(_) => errors += 1,
+            }
+        }
+
+        self.selected.clear();
+
+        if errors > 0 {
+            self.message = Some(format!("Restored {} files ({} errors)", restored, errors));
+        } else {
+            self.message = Some(format!("Restored {} files", restored));
+        }
+
+        // Refresh to update local_differs status
+        if let Some(commit_idx) = self.selected_commit {
+            let hash = self.commits[commit_idx].hash.clone();
+            self.load_commit_files(&hash);
+        }
     }
 
     /// Refresh file list based on current mode
@@ -369,12 +628,14 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        if self.files.is_empty() {
+        // Get the appropriate list length and state based on mode
+        let (len, list_state) = self.get_current_list_info();
+        if len == 0 {
             return;
         }
-        let i = match self.list_state.selected() {
+        let i = match list_state.selected() {
             Some(i) => {
-                if i >= self.files.len() - 1 {
+                if i >= len - 1 {
                     0
                 } else {
                     i + 1
@@ -382,28 +643,56 @@ impl App {
             }
             None => 0,
         };
-        self.list_state.select(Some(i));
+        self.set_current_selection(i);
     }
 
     pub fn previous(&mut self) {
-        if self.files.is_empty() {
+        let (len, list_state) = self.get_current_list_info();
+        if len == 0 {
             return;
         }
-        let i = match self.list_state.selected() {
+        let i = match list_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.files.len() - 1
+                    len - 1
                 } else {
                     i - 1
                 }
             }
             None => 0,
         };
-        self.list_state.select(Some(i));
+        self.set_current_selection(i);
+    }
+
+    /// Get current list length and state based on mode
+    fn get_current_list_info(&self) -> (usize, &ListState) {
+        if self.mode == TuiMode::Browse {
+            match self.restore_view {
+                RestoreView::Commits => (self.commits.len(), &self.restore_list_state),
+                RestoreView::Files => (self.restore_files.len(), &self.restore_list_state),
+            }
+        } else {
+            (self.files.len(), &self.list_state)
+        }
+    }
+
+    /// Set selection for current list
+    fn set_current_selection(&mut self, i: usize) {
+        if self.mode == TuiMode::Browse {
+            self.restore_list_state.select(Some(i));
+        } else {
+            self.list_state.select(Some(i));
+        }
     }
 
     pub fn toggle_select(&mut self) {
-        if let Some(i) = self.list_state.selected() {
+        let selected_idx = if self.mode == TuiMode::Browse {
+            self.restore_list_state.selected()
+        } else {
+            self.list_state.selected()
+        };
+
+        if let Some(i) = selected_idx {
             if self.selected.contains(&i) {
                 self.selected.remove(&i);
             } else {
@@ -413,16 +702,27 @@ impl App {
     }
 
     pub fn select_all(&mut self) {
-        if self.selected.len() == self.files.len() {
+        let len = if self.mode == TuiMode::Browse {
+            match self.restore_view {
+                RestoreView::Commits => self.commits.len(),
+                RestoreView::Files => self.restore_files.len(),
+            }
+        } else {
+            self.files.len()
+        };
+
+        if self.selected.len() == len {
             self.selected.clear();
         } else {
-            self.selected = (0..self.files.len()).collect();
+            self.selected = (0..len).collect();
         }
     }
 
     pub fn next_mode(&mut self) {
         let next = (self.mode.index() + 1) % 3;
         self.mode = TuiMode::from_index(next);
+        self.selected.clear();
+        self.reset_mode_state();
         self.refresh_files();
     }
 
@@ -433,7 +733,25 @@ impl App {
             self.mode.index() - 1
         };
         self.mode = TuiMode::from_index(prev);
+        self.selected.clear();
+        self.reset_mode_state();
         self.refresh_files();
+    }
+
+    /// Reset mode-specific state when switching modes
+    fn reset_mode_state(&mut self) {
+        // Reset restore state when entering Browse mode
+        if self.mode == TuiMode::Browse {
+            self.restore_view = RestoreView::Commits;
+            self.selected_commit = None;
+            self.restore_files.clear();
+            self.load_commits();
+            if !self.commits.is_empty() {
+                self.restore_list_state.select(Some(0));
+            } else {
+                self.restore_list_state.select(None);
+            }
+        }
     }
 
     pub fn toggle_tracking(&mut self) {
@@ -451,18 +769,16 @@ impl App {
                         .position(|p| p.path() == pattern)
                     {
                         self.config.tracked_files.remove(pos);
-                        if self.config.save(&self.config_path).is_ok() {
-                            self.message = Some(format!("Removed: {}", pattern));
-                        }
+                        self.config_dirty = true;
+                        self.message = Some(format!("Removed: {} (saves on exit)", pattern));
                     }
                 } else {
                     // Add to tracking
                     self.config
                         .tracked_files
                         .push(TrackedPattern::simple(&pattern));
-                    if self.config.save(&self.config_path).is_ok() {
-                        self.message = Some(format!("Added: {}", pattern));
-                    }
+                    self.config_dirty = true;
+                    self.message = Some(format!("Added: {} (saves on exit)", pattern));
                 }
 
                 self.refresh_files();
@@ -488,11 +804,52 @@ impl App {
         }
 
         if removed > 0 {
-            if self.index.save(&self.index_path).is_ok() {
-                self.message = Some(format!("Removed {} file(s) from index", removed));
-            }
+            self.index_dirty = true;
+            self.message = Some(format!("Removed {} file(s) from index (saves on exit)", removed));
             self.selected.clear();
             self.refresh_files();
+        }
+    }
+
+    /// Perform backup of selected or all tracked files
+    pub fn perform_backup(&mut self) {
+        use chrono::Local;
+
+        self.message = Some("Running backup...".to_string());
+
+        // Generate timestamp-based commit message
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let commit_msg = format!("Backup {}", timestamp);
+
+        // Get current executable path to run backup command
+        let exe_path = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(e) => {
+                self.message = Some(format!("Cannot find executable: {}", e));
+                return;
+            }
+        };
+
+        // Run backup command using the current executable
+        let output = std::process::Command::new(&exe_path)
+            .args(["backup", "--message", &commit_msg])
+            .output();
+
+        match output {
+            Ok(output) => {
+                if output.status.success() {
+                    self.message = Some(format!("Backup complete: {}", commit_msg));
+                    // Reload commits after backup
+                    self.load_commits();
+                    self.refresh_files();
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    self.message = Some(format!("Backup failed: {}", stderr.trim()));
+                }
+            }
+            Err(e) => {
+                self.message = Some(format!("Backup error: {}", e));
+            }
         }
     }
 }
@@ -509,7 +866,7 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Run the TUI application
-pub fn run(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf) -> Result<()> {
+pub fn run(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf, data_dir: PathBuf) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -518,7 +875,7 @@ pub fn run(config: Config, index: Index, config_path: PathBuf, index_path: PathB
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(config, index, config_path, index_path);
+    let mut app = App::new(config, index, config_path, index_path, data_dir);
 
     // Main loop
     let res = run_app(&mut terminal, &mut app);
@@ -556,9 +913,8 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             app.config
                                 .tracked_files
                                 .push(TrackedPattern::simple(&pattern));
-                            if app.config.save(&app.config_path).is_ok() {
-                                app.message = Some(format!("Added: {}", pattern));
-                            }
+                            app.config_dirty = true;
+                            app.message = Some(format!("Added: {} (saves on exit)", pattern));
                             app.add_input.clear();
                             app.refresh_files();
                         }
@@ -616,23 +972,52 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     app.next();
                 }
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
-                    // In Add mode, Enter/Right/l enters directories
-                    if app.mode == TuiMode::Add {
-                        if let Some(i) = app.list_state.selected() {
-                            if i < app.files.len() && app.files[i].is_dir {
-                                app.enter_directory();
-                            } else {
-                                app.toggle_tracking();
+                    // Mode-specific Enter behavior
+                    match app.mode {
+                        TuiMode::Add => {
+                            // In Add mode, Enter enters directories or adds files to tracking
+                            if let Some(i) = app.list_state.selected() {
+                                if i < app.files.len() && app.files[i].is_dir {
+                                    app.enter_directory();
+                                } else {
+                                    app.toggle_tracking();
+                                }
                             }
                         }
+                        TuiMode::Status => {
+                            // In Status mode, Enter does nothing (use 'b' to backup)
+                            app.message = Some("Press 'b' to backup, 'd' to remove from tracking".to_string());
+                        }
+                        TuiMode::Browse => {
+                            // In Restore mode, Enter selects commit or restores files
+                            match app.restore_view {
+                                RestoreView::Commits => {
+                                    // Select commit and show its files
+                                    app.select_commit();
+                                }
+                                RestoreView::Files => {
+                                    // Restore selected files
+                                    app.perform_restore();
+                                }
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('b') => {
+                    // Backup - only in Status mode
+                    if app.mode == TuiMode::Status {
+                        app.perform_backup();
                     } else {
-                        app.toggle_tracking();
+                        app.message = Some("Switch to Tracked Files tab to run backup".to_string());
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
                     // In Add mode, go to parent directory
+                    // In Restore mode files view, go back to commits
                     if app.mode == TuiMode::Add {
                         app.parent_directory();
+                    } else if app.mode == TuiMode::Browse && app.restore_view == RestoreView::Files {
+                        app.back_to_commits();
                     }
                 }
                 KeyCode::Char('~') => {
@@ -647,7 +1032,13 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                 }
                 KeyCode::Char('d') | KeyCode::Delete => {
-                    app.remove_from_index();
+                    // In Status mode, 'd' removes from tracking config
+                    // In other modes, removes from index
+                    if app.mode == TuiMode::Status {
+                        app.toggle_tracking();  // This removes tracked files
+                    } else {
+                        app.remove_from_index();
+                    }
                 }
                 KeyCode::Char('r') => {
                     app.refresh_files();
@@ -666,6 +1057,8 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         }
 
         if app.should_quit {
+            // Save any pending changes before quitting
+            app.save_if_dirty()?;
             return Ok(());
         }
     }
@@ -715,6 +1108,12 @@ fn ui(f: &mut Frame, app: &App) {
 }
 
 fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
+    // Handle Browse/Restore mode specially
+    if app.mode == TuiMode::Browse {
+        render_restore_view(f, area, app);
+        return;
+    }
+
     let items: Vec<ListItem> = app
         .files
         .iter()
@@ -757,7 +1156,7 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
 
                 ListItem::new(line)
             } else {
-                // Status/Browse mode - show full info
+                // Status mode - show full info
                 let status_symbol = file.status.symbol();
                 let mode_indicator = match file.backup_mode {
                     Some(BackupMode::Archive) => "[A]",
@@ -794,18 +1193,18 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let title = match app.mode {
-        TuiMode::Status => " Your Monitored Files - Shows what's backed up and any changes ".to_string(),
-        TuiMode::Browse => " Restore Files - Select files to restore from backup ".to_string(),
+        TuiMode::Status => " Your Tracked Files - Shows backup status and changes ".to_string(),
+        TuiMode::Browse => " Restore ".to_string(), // Won't be reached
         TuiMode::Add => {
             // Show current path in Add mode with hint
             let path_display = if let Some(home) = dirs::home_dir() {
                 if let Ok(rel) = app.browse_dir.strip_prefix(&home) {
-                    format!(" Browse: ~/{} - Press Enter to add files to backup ", rel.display())
+                    format!(" ~/{} - Select a file and press Enter to track it ", rel.display())
                 } else {
-                    format!(" Browse: {} - Press Enter to add files to backup ", app.browse_dir.display())
+                    format!(" {} - Select a file and press Enter to track it ", app.browse_dir.display())
                 }
             } else {
-                format!(" Browse: {} - Press Enter to add files to backup ", app.browse_dir.display())
+                format!(" {} - Select a file and press Enter to track it ", app.browse_dir.display())
             };
             path_display
         }
@@ -823,41 +1222,163 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
     f.render_stateful_widget(list, area, &mut app.list_state.clone());
 }
 
+fn render_restore_view(f: &mut Frame, area: Rect, app: &App) {
+    match app.restore_view {
+        RestoreView::Commits => {
+            // Show commit history
+            let items: Vec<ListItem> = app
+                .commits
+                .iter()
+                .enumerate()
+                .map(|(i, commit)| {
+                    let selected_marker = if app.selected.contains(&i) { "*" } else { " " };
+
+                    // Parse date to show only date and time
+                    let date_short = if commit.date.len() > 19 {
+                        &commit.date[..19]
+                    } else {
+                        &commit.date
+                    };
+
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", selected_marker)),
+                        Span::styled(
+                            format!("{} ", commit.short_hash),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::styled(
+                            format!("{} ", date_short),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                        Span::raw(commit.message.clone()),
+                    ]);
+
+                    ListItem::new(line)
+                })
+                .collect();
+
+            let title = " Backup History - Select a backup to restore from (Enter to select) ";
+
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(title))
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("> ");
+
+            f.render_stateful_widget(list, area, &mut app.restore_list_state.clone());
+        }
+        RestoreView::Files => {
+            // Show files from selected commit
+            let items: Vec<ListItem> = app
+                .restore_files
+                .iter()
+                .enumerate()
+                .map(|(i, file)| {
+                    let selected_marker = if app.selected.contains(&i) { "*" } else { " " };
+
+                    // Status indicator
+                    let (status, color) = if !file.exists_locally {
+                        ("NEW", Color::Cyan)  // File doesn't exist locally
+                    } else if file.local_differs {
+                        ("CHG", Color::Yellow)  // Local file is different
+                    } else {
+                        ("OK ", Color::Green)  // File matches backup
+                    };
+
+                    let size_str = format_size(file.size);
+
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", selected_marker)),
+                        Span::styled(
+                            format!("{} ", status),
+                            Style::default().fg(color),
+                        ),
+                        Span::raw(format!("{}  ", size_str)),
+                        Span::styled(
+                            file.display_path.clone(),
+                            Style::default().fg(if file.local_differs {
+                                Color::White
+                            } else {
+                                Color::DarkGray
+                            }),
+                        ),
+                    ]);
+
+                    ListItem::new(line)
+                })
+                .collect();
+
+            let commit_info = app.selected_commit
+                .and_then(|i| app.commits.get(i))
+                .map(|c| format!("{} - {}", c.short_hash, c.message))
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let title = format!(
+                " Files in backup: {} - Enter to restore, Backspace to go back ",
+                commit_info
+            );
+
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(title))
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("> ");
+
+            f.render_stateful_widget(list, area, &mut app.restore_list_state.clone());
+        }
+    }
+}
+
 fn render_help(f: &mut Frame, area: Rect) {
     let help_text = vec![
         "",
         "  WHAT EACH TAB DOES",
         "  ==================",
-        "  Backup Status  See your monitored files and their backup state",
-        "  Restore        Browse backups and restore files to your system",
-        "  Add Files      Browse your system to add new files to backup",
+        "  Tracked Files  View files you're backing up and their status",
+        "  Add Files      Browse your computer to add files to backup",
+        "  Restore        Recover files from previous backups",
         "",
-        "  STATUS SYMBOLS",
-        "  ==============",
-        "  (space) = File is backed up and unchanged",
-        "  M       = File was Modified since last backup",
-        "  +       = New file, not yet backed up",
-        "  -       = File was Deleted from your system",
+        "  STATUS SYMBOLS (Tracked Files tab)",
+        "  ===================================",
+        "  (space) = Backed up and unchanged",
+        "  M       = Modified since last backup",
+        "  +       = New, not yet backed up",
+        "  -       = Deleted from your system",
         "",
         "  NAVIGATION",
         "  ==========",
         "  j/Down      Move down          Tab         Next tab",
         "  k/Up        Move up            Shift+Tab   Previous tab",
         "  g           Go to top          ?/F1        Show this help",
-        "  G           Go to bottom       q           Quit",
+        "  G           Go to bottom       q           Quit (saves changes)",
+        "",
+        "  TRACKED FILES TAB",
+        "  =================",
+        "  b           Run backup now",
+        "  d/Delete    Stop tracking this file",
+        "  r           Refresh list",
         "",
         "  ADD FILES TAB",
         "  =============",
-        "  Enter/l     Enter directory    a           Add pattern manually",
-        "  Backspace/h Parent directory   ~           Go to home",
+        "  Enter/l     Open folder / Add file to tracking",
+        "  Backspace/h Go back             a           Type a path manually",
+        "  ~           Go to home folder",
         "",
-        "  ACTIONS",
-        "  =======",
-        "  Space       Select/deselect file(s)",
-        "  Ctrl+a      Select all / Deselect all",
-        "  Enter       Add to backup (Add tab) / Enter dir",
-        "  d/Delete    Remove from backup tracking",
-        "  r           Refresh file list",
+        "  RESTORE TAB",
+        "  ===========",
+        "  Enter       Select backup / Restore file(s)",
+        "  Backspace   Go back to backup list",
+        "  Space       Select multiple files",
+        "  Symbols: NEW=missing, CHG=changed, OK=matches backup",
+        "  ~           Go to home",
+        "",
+        "  Note: Changes are saved when you quit (q)",
         "",
         "  Press any key to close",
     ];
@@ -913,12 +1434,17 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         msg.clone()
     } else {
         let selected_count = app.selected.len();
-        let total = app.files.len();
 
-        let mode_hint = match app.mode {
-            TuiMode::Status => "Viewing backup status",
-            TuiMode::Browse => "Select files to restore",
-            TuiMode::Add => "Browse and add files to backup",
+        // Get total count based on current mode/view
+        let (total, mode_hint) = match app.mode {
+            TuiMode::Status => (app.files.len(), "b: backup | d: remove"),
+            TuiMode::Browse => {
+                match app.restore_view {
+                    RestoreView::Commits => (app.commits.len(), "Enter: select backup"),
+                    RestoreView::Files => (app.restore_files.len(), "Enter: restore | Backspace: back"),
+                }
+            }
+            TuiMode::Add => (app.files.len(), "Enter: add file | a: type path"),
         };
 
         if selected_count > 0 {
@@ -928,7 +1454,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             )
         } else {
             format!(
-                " {} files | {} | Tab: switch tab | ?: help | q: quit",
+                " {} items | {} | Tab: switch tab | ?: help | q: quit",
                 total, mode_hint
             )
         }

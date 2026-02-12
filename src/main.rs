@@ -253,6 +253,8 @@ fn cmd_init() -> anyhow::Result<()> {
     println!("\n📋 Backup modes available:");
     println!("   • incremental - Content-addressed storage with deduplication (default)");
     println!("   • archive     - Compressed tarball snapshots");
+    println!("\n💡 Tip: You can customize the data directory by adding to config.toml:");
+    println!("   data_dir = \"~/my-custom-backup-path\"");
     println!("\nNext steps:");
     println!("   1. Edit your config: {}", config_path.display());
     println!("   2. Run 'dotmatrix scan' to index your files");
@@ -1641,6 +1643,7 @@ fn cmd_remove(patterns: Vec<String>) -> anyhow::Result<()> {
 fn cmd_tui() -> anyhow::Result<()> {
     let config_path = dotmatrix::get_config_path()?;
     let index_path = dotmatrix::get_index_path()?;
+    let data_dir = dotmatrix::get_data_dir()?;
 
     if !config_path.exists() {
         println!("❌ No config file found. Run 'dotmatrix init' first.");
@@ -1654,5 +1657,5 @@ fn cmd_tui() -> anyhow::Result<()> {
         Index::new()
     };
 
-    tui::run(config, index, config_path, index_path)
+    tui::run(config, index, config_path, index_path, data_dir)
 }
