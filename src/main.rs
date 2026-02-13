@@ -2,7 +2,7 @@ use chrono::{Local, TimeZone, Utc};
 use clap::{Parser, Subcommand};
 use dotmatrix::config::{BackupMode, Config, TrackedPattern};
 use dotmatrix::index::{FileEntry, Index};
-use dotmatrix::scanner::{self, Verbosity};
+use dotmatrix::scanner::{self, RecursiveScanOptions, Verbosity};
 use dotmatrix::tui;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -37,7 +37,21 @@ enum Commands {
     /// Initialize dotmatrix configuration and storage
     Init,
     /// Add files or patterns to tracking
-    Add { patterns: Vec<String> },
+    Add {
+        patterns: Vec<String>,
+        /// Recursively add all files in directories
+        #[arg(short, long)]
+        recursive: bool,
+        /// Exclude patterns when using recursive mode (can be specified multiple times)
+        #[arg(short, long)]
+        exclude: Option<Vec<String>>,
+        /// Maximum directory depth for recursive scanning
+        #[arg(long)]
+        max_depth: Option<usize>,
+        /// Show what would be added without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Scan tracked files and update index
     Scan {
         #[arg(short, long)]
@@ -98,7 +112,13 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init => cmd_init()?,
-        Commands::Add { patterns } => cmd_add(patterns)?,
+        Commands::Add { patterns, recursive, exclude, max_depth, dry_run } => {
+            if recursive {
+                cmd_add_recursive(patterns, exclude.unwrap_or_default(), max_depth, dry_run)?
+            } else {
+                cmd_add(patterns)?
+            }
+        }
         Commands::Scan { yes } => cmd_scan(yes, verbosity)?,
         Commands::Backup { message } => cmd_backup(message, verbosity)?,
         Commands::Restore { commit, dry_run, yes, diff, file, extract_to, remap } => {
@@ -301,6 +321,179 @@ fn cmd_add(patterns: Vec<String>) -> anyhow::Result<()> {
         println!("Run 'dotmatrix scan' to index the files.");
     } else {
         println!("\n⚠️  No new patterns added (all already tracked).");
+    }
+
+    Ok(())
+}
+
+fn cmd_add_recursive(
+    patterns: Vec<String>,
+    exclude: Vec<String>,
+    max_depth: Option<usize>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let config_path = dotmatrix::get_config_path()?;
+
+    if !config_path.exists() {
+        println!("No config file found. Run 'dotmatrix init' first.");
+        return Ok(());
+    }
+
+    let mut config = Config::load(&config_path)?;
+
+    if patterns.is_empty() {
+        println!("No directory specified. Usage: dotmatrix add -r <directory>");
+        return Ok(());
+    }
+
+    let mut total_added = 0;
+
+    for pattern in &patterns {
+        // Expand tilde in path
+        let dir = scanner::expand_tilde(pattern)?;
+
+        if !dir.exists() {
+            println!("Path not found: {}", dir.display());
+            continue;
+        }
+
+        if !dir.is_dir() {
+            println!("Not a directory: {}", dir.display());
+            println!("Use 'dotmatrix add {}' for individual files.", pattern);
+            continue;
+        }
+
+        println!("Scanning directory recursively: {}\n", dir.display());
+
+        // Find and show applicable .gitignore files
+        let gitignores = scanner::find_gitignore_files(&dir);
+        if !gitignores.is_empty() {
+            println!("Found .gitignore files:");
+            for gi in &gitignores {
+                if let Some(home) = dirs::home_dir() {
+                    if let Ok(rel) = gi.strip_prefix(&home) {
+                        println!("   ~/{}", rel.display());
+                    } else {
+                        println!("   {}", gi.display());
+                    }
+                } else {
+                    println!("   {}", gi.display());
+                }
+            }
+            println!();
+        }
+
+        // Show config exclude patterns
+        if !config.exclude.is_empty() {
+            println!("Global exclude patterns from config:");
+            for pattern in &config.exclude {
+                println!("   {}", pattern);
+            }
+            println!();
+        }
+
+        // Show additional CLI excludes
+        if !exclude.is_empty() {
+            println!("Additional exclude patterns:");
+            for pattern in &exclude {
+                println!("   {}", pattern);
+            }
+            println!();
+        }
+
+        // Build scan options
+        let options = RecursiveScanOptions::new()
+            .with_gitignore(true)
+            .with_excludes(exclude.clone());
+        let options = if let Some(depth) = max_depth {
+            options.with_max_depth(depth)
+        } else {
+            options
+        };
+
+        // Perform scan
+        let result = scanner::scan_directory_recursive(&dir, &config.exclude, &options)?;
+
+        // Show results
+        println!("Scan Results:");
+        println!("   Files found: {}", result.files.len());
+        println!("   Directories scanned: {}", result.directories_scanned);
+        if result.gitignore_excluded > 0 {
+            println!("   Excluded by .gitignore: {}", result.gitignore_excluded);
+        }
+        if result.config_excluded > 0 {
+            println!("   Excluded by config patterns: {}", result.config_excluded);
+        }
+        if !result.errors.is_empty() {
+            println!("   Errors: {}", result.errors.len());
+            for (path, err) in &result.errors {
+                eprintln!("      {}: {}", path.display(), err);
+            }
+        }
+        println!();
+
+        if result.files.is_empty() {
+            println!("No files found to add.");
+            continue;
+        }
+
+        // Show files to add
+        println!("Files to add:");
+        let show_count = result.files.len().min(10);
+        for file in result.files.iter().take(show_count) {
+            if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = file.strip_prefix(&home) {
+                    println!("   ~/{}", rel.display());
+                } else {
+                    println!("   {}", file.display());
+                }
+            } else {
+                println!("   {}", file.display());
+            }
+        }
+        if result.files.len() > show_count {
+            println!("   ... and {} more", result.files.len() - show_count);
+        }
+        println!();
+
+        if dry_run {
+            println!("Dry run complete. No files were added to tracking.");
+            continue;
+        }
+
+        // Add files to config
+        let mut added = 0;
+        for file in &result.files {
+            // Convert to tilde path for config
+            let pattern = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = file.strip_prefix(&home) {
+                    format!("~/{}", rel.display())
+                } else {
+                    file.to_string_lossy().to_string()
+                }
+            } else {
+                file.to_string_lossy().to_string()
+            };
+
+            // Check if already tracked
+            let already_tracked = config.tracked_files.iter().any(|p| p.path() == pattern);
+            if !already_tracked {
+                config.tracked_files.push(TrackedPattern::simple(&pattern));
+                added += 1;
+            }
+        }
+
+        if added > 0 {
+            total_added += added;
+            println!("Added {} files to tracking.", added);
+        } else {
+            println!("All files already tracked.");
+        }
+    }
+
+    if total_added > 0 && !dry_run {
+        config.save(&config_path)?;
+        println!("\nConfig updated! Run 'dotmatrix scan' to index the files.");
     }
 
     Ok(())

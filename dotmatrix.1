@@ -27,14 +27,31 @@ Print version information.
 .SS init
 Initialize dotmatrix configuration and storage directories. Creates config file,
 index, and git repository. Prompts for git identity if not configured globally.
-.SS add \fIpatterns\fR...
+.SS add [\fIoptions\fR] \fIpatterns\fR...
 Add file patterns to the tracking list.
+.TP
+.BR \-r ", " \-\-recursive
+Recursively add all files in directories, respecting .gitignore files.
+.TP
+.BR \-e ", " \-\-exclude " " \fIpattern\fR
+Exclude files matching pattern (can be specified multiple times).
+.TP
+.BR \-\-max\-depth " " \fIdepth\fR
+Maximum directory depth for recursive scanning.
+.TP
+.BR \-\-dry\-run
+Show what would be added without making changes.
 .PP
 .RS
 .nf
 dotmatrix add ~/.bashrc
 dotmatrix add ~/.config/nvim/**
 dotmatrix add /etc/nginx/nginx.conf
+
+# Recursive add (respects .gitignore)
+dotmatrix add -r ~/.config/nvim
+dotmatrix add -r ~/dotfiles --exclude "*.cache"
+dotmatrix add -r ~/.config --max-depth 2 --dry-run
 .fi
 .RE
 .SS remove \fIpatterns\fR...
@@ -112,11 +129,20 @@ Go back / Parent directory
 .B ~
 Go to home directory (Add Files tab)
 .TP
+.B A
+Add folder as pattern with /** suffix (Add Files tab)
+.TP
+.B R
+Recursive add - preview and select individual files (Add Files tab)
+.TP
 .B Space
 Select multiple items
 .TP
 .B a
 Type a path manually
+.TP
+.B Ctrl+A
+Select/deselect all (in recursive preview)
 .TP
 .B d
 Stop tracking file

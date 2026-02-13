@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use glob::glob;
+use ignore::WalkBuilder;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Read;
@@ -7,6 +8,188 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::index::FileEntry;
+
+/// Options for recursive directory scanning
+#[derive(Debug, Clone, Default)]
+pub struct RecursiveScanOptions {
+    /// Maximum depth to recurse (None = unlimited)
+    pub max_depth: Option<usize>,
+    /// Additional glob patterns to exclude
+    pub additional_excludes: Vec<String>,
+    /// Whether to respect .gitignore files (default: true)
+    pub respect_gitignore: bool,
+}
+
+impl RecursiveScanOptions {
+    pub fn new() -> Self {
+        Self {
+            max_depth: None,
+            additional_excludes: Vec::new(),
+            respect_gitignore: true,
+        }
+    }
+
+    pub fn with_max_depth(mut self, depth: usize) -> Self {
+        self.max_depth = Some(depth);
+        self
+    }
+
+    pub fn with_excludes(mut self, excludes: Vec<String>) -> Self {
+        self.additional_excludes = excludes;
+        self
+    }
+
+    pub fn with_gitignore(mut self, respect: bool) -> Self {
+        self.respect_gitignore = respect;
+        self
+    }
+}
+
+/// Result of a recursive directory scan
+#[derive(Debug, Clone, Default)]
+pub struct RecursiveScanResult {
+    /// Files found that should be tracked
+    pub files: Vec<PathBuf>,
+    /// Number of directories scanned
+    pub directories_scanned: usize,
+    /// Number of files excluded by .gitignore
+    pub gitignore_excluded: usize,
+    /// Number of files excluded by config patterns
+    pub config_excluded: usize,
+    /// Errors encountered during scanning (path, error message)
+    pub errors: Vec<(PathBuf, String)>,
+}
+
+/// Scan a directory recursively, respecting .gitignore and exclude patterns
+pub fn scan_directory_recursive(
+    dir: &Path,
+    config_excludes: &[String],
+    options: &RecursiveScanOptions,
+) -> Result<RecursiveScanResult> {
+    let mut result = RecursiveScanResult::default();
+
+    // Build the walker
+    let mut builder = WalkBuilder::new(dir);
+
+    // Configure gitignore handling
+    builder.git_ignore(options.respect_gitignore);
+    builder.git_global(options.respect_gitignore);
+    builder.git_exclude(options.respect_gitignore);
+
+    // Set max depth if specified
+    if let Some(depth) = options.max_depth {
+        builder.max_depth(Some(depth));
+    }
+
+    // Note: Additional excludes are handled in the loop below since the ignore
+    // crate's pattern handling is for files, not glob patterns directly
+
+    // Track gitignore-excluded files by running a second pass without gitignore
+    let mut all_files_count: usize = 0;
+    if options.respect_gitignore {
+        let mut no_ignore_builder = WalkBuilder::new(dir);
+        no_ignore_builder.git_ignore(false);
+        no_ignore_builder.git_global(false);
+        no_ignore_builder.git_exclude(false);
+        if let Some(depth) = options.max_depth {
+            no_ignore_builder.max_depth(Some(depth));
+        }
+        for entry in no_ignore_builder.build() {
+            if let Ok(e) = entry {
+                if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    all_files_count += 1;
+                }
+            }
+        }
+    }
+
+    // Walk the directory
+    let mut files_before_config_exclude = 0;
+    for entry in builder.build() {
+        match entry {
+            Ok(entry) => {
+                let path = entry.path();
+
+                // Track directories
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    result.directories_scanned += 1;
+                    continue;
+                }
+
+                // Skip non-files
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    continue;
+                }
+
+                files_before_config_exclude += 1;
+
+                // Check against additional excludes
+                let should_exclude = options.additional_excludes.iter().any(|pattern| {
+                    if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                        glob_pattern.matches_path(path)
+                    } else {
+                        false
+                    }
+                });
+
+                if should_exclude {
+                    result.config_excluded += 1;
+                    continue;
+                }
+
+                // Check against config excludes
+                if is_excluded(path, config_excludes) {
+                    result.config_excluded += 1;
+                    continue;
+                }
+
+                result.files.push(path.to_path_buf());
+            }
+            Err(e) => {
+                // ignore::Error doesn't have a direct path method, extract from error message
+                result.errors.push((PathBuf::new(), e.to_string()));
+            }
+        }
+    }
+
+    // Calculate gitignore exclusions
+    if options.respect_gitignore {
+        result.gitignore_excluded = all_files_count.saturating_sub(files_before_config_exclude);
+    }
+
+    // Sort files for consistent output
+    result.files.sort();
+
+    Ok(result)
+}
+
+/// Find all .gitignore files that apply to a directory
+pub fn find_gitignore_files(dir: &Path) -> Vec<PathBuf> {
+    let mut gitignores = Vec::new();
+
+    // Check for .gitignore in the directory itself
+    let local_gitignore = dir.join(".gitignore");
+    if local_gitignore.exists() {
+        gitignores.push(local_gitignore);
+    }
+
+    // Walk up to find parent .gitignore files (up to home directory)
+    let home = dirs::home_dir();
+    let mut current = dir.parent();
+    while let Some(parent) = current {
+        let gitignore = parent.join(".gitignore");
+        if gitignore.exists() {
+            gitignores.push(gitignore);
+        }
+        // Stop at home directory
+        if home.as_ref() == Some(&parent.to_path_buf()) {
+            break;
+        }
+        current = parent.parent();
+    }
+
+    gitignores
+}
 
 /// Expand a path with ~ to the user's home directory
 pub fn expand_tilde(path: &str) -> Result<PathBuf> {

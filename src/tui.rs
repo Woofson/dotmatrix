@@ -1,6 +1,6 @@
 use crate::config::{BackupMode, Config, TrackedPattern};
 use crate::index::Index;
-use crate::scanner::{self, Verbosity};
+use crate::scanner::{self, RecursiveScanOptions, Verbosity};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -110,6 +110,35 @@ pub enum RestoreView {
     Files,       // Viewing files from selected commit
 }
 
+/// Add mode sub-state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddSubMode {
+    #[default]
+    Browse,           // Normal file browser
+    RecursivePreview, // Previewing recursive add
+}
+
+/// File entry for recursive preview
+#[derive(Debug, Clone)]
+pub struct PreviewFile {
+    pub path: PathBuf,
+    pub display_path: String,
+    pub size: u64,
+    pub is_excluded: bool,
+    pub exclude_reason: Option<String>,
+}
+
+/// State for recursive add preview
+#[derive(Debug, Clone)]
+pub struct RecursivePreviewState {
+    pub source_dir: PathBuf,
+    pub preview_files: Vec<PreviewFile>,
+    pub gitignore_excluded: usize,
+    pub config_excluded: usize,
+    pub selected_files: HashSet<usize>,
+    pub preview_list_state: ListState,
+}
+
 /// File entry for restore (from a specific commit)
 #[derive(Debug, Clone)]
 pub struct RestoreFile {
@@ -138,6 +167,8 @@ pub struct App {
     pub help_scroll: u16,  // Scroll position for help window
     pub add_input: String,
     pub add_mode: bool,
+    pub backup_message_input: String,
+    pub backup_message_mode: bool,
     pub browse_dir: PathBuf,  // Current directory for Add mode file browser
     pub config_dirty: bool,   // Track if config needs saving on exit
     pub index_dirty: bool,    // Track if index needs saving on exit
@@ -147,6 +178,9 @@ pub struct App {
     pub selected_commit: Option<usize>,  // Index into commits
     pub restore_files: Vec<RestoreFile>, // Files from selected commit
     pub restore_list_state: ListState,   // Separate list state for restore
+    // Recursive add state
+    pub add_sub_mode: AddSubMode,
+    pub recursive_preview: Option<RecursivePreviewState>,
 }
 
 impl App {
@@ -168,6 +202,8 @@ impl App {
             help_scroll: 0,
             add_input: String::new(),
             add_mode: false,
+            backup_message_input: String::new(),
+            backup_message_mode: false,
             browse_dir: home,
             config_dirty: false,
             index_dirty: false,
@@ -176,6 +212,8 @@ impl App {
             selected_commit: None,
             restore_files: Vec::new(),
             restore_list_state: ListState::default(),
+            add_sub_mode: AddSubMode::Browse,
+            recursive_preview: None,
         };
         app.refresh_files();
         app.load_commits();
@@ -760,7 +798,21 @@ impl App {
         if let Some(i) = self.list_state.selected() {
             if i < self.files.len() {
                 let file = &self.files[i];
-                let pattern = file.display_path.clone();
+
+                // In Add mode, display_path is just the filename, so use full path
+                let pattern = if self.mode == TuiMode::Add {
+                    if let Some(home) = dirs::home_dir() {
+                        if let Ok(rel) = file.path.strip_prefix(&home) {
+                            format!("~/{}", rel.display())
+                        } else {
+                            file.path.to_string_lossy().to_string()
+                        }
+                    } else {
+                        file.path.to_string_lossy().to_string()
+                    }
+                } else {
+                    file.display_path.clone()
+                };
 
                 if file.is_tracked {
                     // Remove from tracking
@@ -783,6 +835,222 @@ impl App {
                     self.message = Some(format!("Added: {} (saves on exit)", pattern));
                 }
 
+                self.refresh_files();
+            }
+        }
+    }
+
+    /// Start recursive preview for the selected directory
+    pub fn start_recursive_preview(&mut self) {
+        if self.mode != TuiMode::Add {
+            return;
+        }
+
+        // Get selected item
+        let selected_idx = self.list_state.selected();
+        if selected_idx.is_none() {
+            self.message = Some("No directory selected".to_string());
+            return;
+        }
+
+        let idx = selected_idx.unwrap();
+        if idx >= self.files.len() {
+            return;
+        }
+
+        let file = &self.files[idx];
+        if !file.is_dir {
+            self.message = Some("Select a directory to add recursively".to_string());
+            return;
+        }
+
+        let dir = file.path.clone();
+        self.message = Some(format!("Scanning {}...", file.display_path));
+
+        // Perform recursive scan
+        let options = RecursiveScanOptions::new().with_gitignore(true);
+        let result = match scanner::scan_directory_recursive(&dir, &self.config.exclude, &options) {
+            Ok(r) => r,
+            Err(e) => {
+                self.message = Some(format!("Scan error: {}", e));
+                return;
+            }
+        };
+
+        // Build preview files
+        let mut preview_files = Vec::new();
+        for path in &result.files {
+            let display_path = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = path.strip_prefix(&home) {
+                    format!("~/{}", rel.display())
+                } else {
+                    path.display().to_string()
+                }
+            } else {
+                path.display().to_string()
+            };
+
+            let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+            preview_files.push(PreviewFile {
+                path: path.clone(),
+                display_path,
+                size,
+                is_excluded: false,
+                exclude_reason: None,
+            });
+        }
+
+        // Select all files by default
+        let selected_files: HashSet<usize> = (0..preview_files.len()).collect();
+
+        let mut preview_list_state = ListState::default();
+        if !preview_files.is_empty() {
+            preview_list_state.select(Some(0));
+        }
+
+        self.recursive_preview = Some(RecursivePreviewState {
+            source_dir: dir,
+            preview_files,
+            gitignore_excluded: result.gitignore_excluded,
+            config_excluded: result.config_excluded,
+            selected_files,
+            preview_list_state,
+        });
+
+        self.add_sub_mode = AddSubMode::RecursivePreview;
+        self.message = None;
+    }
+
+    /// Confirm and add files from recursive preview
+    pub fn confirm_recursive_add(&mut self) {
+        if let Some(ref preview) = self.recursive_preview {
+            let mut added = 0;
+
+            for idx in &preview.selected_files {
+                if *idx >= preview.preview_files.len() {
+                    continue;
+                }
+
+                let file = &preview.preview_files[*idx];
+                let pattern = file.display_path.clone();
+
+                // Check if already tracked
+                let already_tracked = self.config.tracked_files.iter().any(|p| p.path() == pattern);
+                if !already_tracked {
+                    self.config.tracked_files.push(TrackedPattern::simple(&pattern));
+                    added += 1;
+                }
+            }
+
+            if added > 0 {
+                self.config_dirty = true;
+                self.message = Some(format!("Added {} files (saves on exit)", added));
+            } else {
+                self.message = Some("All files already tracked".to_string());
+            }
+        }
+
+        self.cancel_recursive_preview();
+        self.refresh_files();
+    }
+
+    /// Cancel recursive preview and return to browse mode
+    pub fn cancel_recursive_preview(&mut self) {
+        self.add_sub_mode = AddSubMode::Browse;
+        self.recursive_preview = None;
+    }
+
+    /// Toggle file selection in recursive preview
+    pub fn toggle_preview_file(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            if let Some(i) = preview.preview_list_state.selected() {
+                if preview.selected_files.contains(&i) {
+                    preview.selected_files.remove(&i);
+                } else {
+                    preview.selected_files.insert(i);
+                }
+            }
+        }
+    }
+
+    /// Select/deselect all files in recursive preview
+    pub fn toggle_all_preview_files(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            if preview.selected_files.len() == preview.preview_files.len() {
+                preview.selected_files.clear();
+            } else {
+                preview.selected_files = (0..preview.preview_files.len()).collect();
+            }
+        }
+    }
+
+    /// Navigate in recursive preview
+    pub fn preview_next(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            let len = preview.preview_files.len();
+            if len == 0 {
+                return;
+            }
+            let i = match preview.preview_list_state.selected() {
+                Some(i) => if i >= len - 1 { 0 } else { i + 1 },
+                None => 0,
+            };
+            preview.preview_list_state.select(Some(i));
+        }
+    }
+
+    pub fn preview_previous(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            let len = preview.preview_files.len();
+            if len == 0 {
+                return;
+            }
+            let i = match preview.preview_list_state.selected() {
+                Some(i) => if i == 0 { len - 1 } else { i - 1 },
+                None => 0,
+            };
+            preview.preview_list_state.select(Some(i));
+        }
+    }
+
+    /// Add selected folder as a pattern (with /** suffix)
+    pub fn add_folder_pattern(&mut self) {
+        if self.mode != TuiMode::Add {
+            return;
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if i < self.files.len() {
+                let file = &self.files[i];
+
+                if !file.is_dir {
+                    // For files, just toggle tracking
+                    self.toggle_tracking();
+                    return;
+                }
+
+                // Build pattern with /** suffix
+                let pattern = if let Some(home) = dirs::home_dir() {
+                    if let Ok(rel) = file.path.strip_prefix(&home) {
+                        format!("~/{}/**", rel.display())
+                    } else {
+                        format!("{}/**", file.path.display())
+                    }
+                } else {
+                    format!("{}/**", file.path.display())
+                };
+
+                // Check if already tracked
+                let already_tracked = self.config.tracked_files.iter().any(|p| p.path() == pattern);
+                if already_tracked {
+                    self.message = Some(format!("Already tracked: {}", pattern));
+                    return;
+                }
+
+                self.config.tracked_files.push(TrackedPattern::simple(&pattern));
+                self.config_dirty = true;
+                self.message = Some(format!("Added: {} (saves on exit)", pattern));
                 self.refresh_files();
             }
         }
@@ -814,14 +1082,16 @@ impl App {
     }
 
     /// Perform backup of selected or all tracked files
-    pub fn perform_backup(&mut self) {
+    pub fn perform_backup(&mut self, custom_message: Option<String>) {
         use chrono::Local;
 
         self.message = Some("Running backup...".to_string());
 
-        // Generate timestamp-based commit message
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let commit_msg = format!("Backup {}", timestamp);
+        // Use custom message or generate timestamp-based commit message
+        let commit_msg = custom_message.unwrap_or_else(|| {
+            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            format!("Backup {}", timestamp)
+        });
 
         // Get current executable path to run backup command
         let exe_path = match std::env::current_exe() {
@@ -928,6 +1198,36 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
+            // Handle recursive preview mode
+            if app.add_sub_mode == AddSubMode::RecursivePreview {
+                match key.code {
+                    KeyCode::Esc => {
+                        app.cancel_recursive_preview();
+                    }
+                    KeyCode::Enter => {
+                        app.confirm_recursive_add();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.preview_next();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.preview_previous();
+                    }
+                    KeyCode::Char(' ') => {
+                        app.toggle_preview_file();
+                        app.preview_next();
+                    }
+                    KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.toggle_all_preview_files();
+                    }
+                    KeyCode::Char('q') => {
+                        app.cancel_recursive_preview();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             if app.add_mode {
                 match key.code {
                     KeyCode::Enter => {
@@ -952,6 +1252,34 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Char(c) => {
                         app.add_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            if app.backup_message_mode {
+                match key.code {
+                    KeyCode::Enter => {
+                        let msg = if app.backup_message_input.is_empty() {
+                            None
+                        } else {
+                            Some(app.backup_message_input.clone())
+                        };
+                        app.backup_message_input.clear();
+                        app.backup_message_mode = false;
+                        app.perform_backup(msg);
+                    }
+                    KeyCode::Esc => {
+                        app.backup_message_input.clear();
+                        app.backup_message_mode = false;
+                        app.message = Some("Backup cancelled".to_string());
+                    }
+                    KeyCode::Backspace => {
+                        app.backup_message_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.backup_message_input.push(c);
                     }
                     _ => {}
                 }
@@ -1029,7 +1357,15 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 KeyCode::Char('b') => {
                     // Backup - only in Status mode
                     if app.mode == TuiMode::Status {
-                        app.perform_backup();
+                        app.perform_backup(None);
+                    } else {
+                        app.message = Some("Switch to Tracked Files tab to run backup".to_string());
+                    }
+                }
+                KeyCode::Char('B') => {
+                    // Backup with custom message - only in Status mode
+                    if app.mode == TuiMode::Status {
+                        app.backup_message_mode = true;
                     } else {
                         app.message = Some("Switch to Tracked Files tab to run backup".to_string());
                     }
@@ -1054,6 +1390,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         app.add_mode = true;
                     }
                 }
+                KeyCode::Char('A') => {
+                    // Add folder as pattern (with /**)
+                    if app.mode == TuiMode::Add {
+                        app.add_folder_pattern();
+                    }
+                }
                 KeyCode::Char('d') | KeyCode::Delete => {
                     // In Status mode, 'd' removes from tracking config
                     // In other modes, removes from index
@@ -1066,6 +1408,14 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 KeyCode::Char('r') => {
                     app.refresh_files();
                     app.message = Some("Refreshed".to_string());
+                }
+                KeyCode::Char('R') => {
+                    // Start recursive add preview in Add mode
+                    if app.mode == TuiMode::Add {
+                        app.start_recursive_preview();
+                    } else {
+                        app.message = Some("Switch to Add Files tab to add recursively".to_string());
+                    }
                 }
                 KeyCode::Char('g') => {
                     app.list_state.select(Some(0));
@@ -1122,6 +1472,10 @@ fn ui(f: &mut Frame, app: &App) {
         render_help(f, chunks[1], app.help_scroll);
     } else if app.add_mode {
         render_add_input(f, chunks[1], app);
+    } else if app.backup_message_mode {
+        render_backup_input(f, chunks[1], app);
+    } else if app.add_sub_mode == AddSubMode::RecursivePreview {
+        render_recursive_preview(f, chunks[1], app);
     } else {
         render_file_list(f, chunks[1], app);
     }
@@ -1358,67 +1712,323 @@ fn render_restore_view(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
-    let help_text = vec![
-        "",
-        "  WHAT EACH TAB DOES",
-        "  ==================",
-        "  Tracked Files  View files you're backing up and their status",
-        "  Add Files      Browse your computer to add files to backup",
-        "  Restore        Recover files from previous backups",
-        "",
-        "  STATUS SYMBOLS (Tracked Files tab)",
-        "  ===================================",
-        "  (space) = Backed up and unchanged",
-        "  M       = Modified since last backup",
-        "  +       = New, not yet backed up",
-        "  -       = Deleted from your system",
-        "",
-        "  MODE INDICATORS",
-        "  ===============",
-        "  [I]      = Incremental backup mode (content-addressed, deduped)",
-        "  [A]      = Archive backup mode (compressed tarball)",
-        "",
-        "  NAVIGATION",
-        "  ==========",
-        "  j/Down      Move down          Tab         Next tab",
-        "  k/Up        Move up            Shift+Tab   Previous tab",
-        "  g           Go to top          ?/F1        Show this help",
-        "  G           Go to bottom       q           Quit (saves changes)",
-        "",
-        "  TRACKED FILES TAB",
-        "  =================",
-        "  b           Run backup now",
-        "  d/Delete    Stop tracking this file",
-        "  r           Refresh list",
-        "",
-        "  ADD FILES TAB",
-        "  =============",
-        "  Enter/l     Open folder / Add file to tracking",
-        "  Backspace/h Go back             a           Type a path manually",
-        "  ~           Go to home folder",
-        "",
-        "  RESTORE TAB",
-        "  ===========",
-        "  Enter       Select backup / Restore file(s)",
-        "  Backspace   Go back to backup list",
-        "  Space       Select multiple files",
-        "",
-        "  RESTORE SYMBOLS",
-        "  ===============",
-        "  NEW       = File missing locally (will be created)",
-        "  CHG       = Local file differs from backup",
-        "  OK        = Local file matches backup",
-        "",
-        "  Note: Changes are saved when you quit (q)",
-        "",
-        "  Scroll: Up/Down/j/k  |  Press any other key to close",
+fn render_recursive_preview(f: &mut Frame, area: Rect, app: &App) {
+    let preview = match &app.recursive_preview {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Split area for header info and file list
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5), // Header with stats
+            Constraint::Min(0),    // File list
+        ])
+        .split(area);
+
+    // Header with directory info and stats
+    let source_display = if let Some(home) = dirs::home_dir() {
+        if let Ok(rel) = preview.source_dir.strip_prefix(&home) {
+            format!("~/{}", rel.display())
+        } else {
+            preview.source_dir.display().to_string()
+        }
+    } else {
+        preview.source_dir.display().to_string()
+    };
+
+    let selected_count = preview.selected_files.len();
+    let total_count = preview.preview_files.len();
+
+    let header_lines = vec![
+        Line::from(vec![
+            Span::raw("Adding recursively: "),
+            Span::styled(&source_display, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("{}", selected_count), Style::default().fg(Color::Green)),
+            Span::raw(" files selected | "),
+            Span::styled(format!("{}", preview.gitignore_excluded), Style::default().fg(Color::DarkGray)),
+            Span::raw(" excluded by .gitignore | "),
+            Span::styled(format!("{}", preview.config_excluded), Style::default().fg(Color::DarkGray)),
+            Span::raw(" excluded by config"),
+        ]),
+        Line::from(vec![
+            Span::styled("Space", Style::default().fg(Color::Cyan)),
+            Span::raw(": toggle | "),
+            Span::styled("Ctrl+A", Style::default().fg(Color::Cyan)),
+            Span::raw(": select all | "),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::raw(": add selected | "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": cancel"),
+        ]),
     ];
 
-    let text: Vec<Line> = help_text.iter().map(|s| Line::from(*s)).collect();
-    let paragraph = Paragraph::new(text)
+    let header = Paragraph::new(header_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Recursive Add Preview "))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(header, chunks[0]);
+
+    // File list
+    let items: Vec<ListItem> = preview
+        .preview_files
+        .iter()
+        .enumerate()
+        .map(|(i, file)| {
+            let selected_marker = if preview.selected_files.contains(&i) { "[x]" } else { "[ ]" };
+            let size_str = format_size(file.size);
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", selected_marker),
+                    Style::default().fg(if preview.selected_files.contains(&i) {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+                Span::raw(format!("{}  ", size_str)),
+                Span::styled(
+                    file.display_path.clone(),
+                    Style::default().fg(if preview.selected_files.contains(&i) {
+                        Color::White
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+            ]);
+
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list_title = format!(" Files ({}/{} selected) ", selected_count, total_count);
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(list_title))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, chunks[1], &mut preview.preview_list_state.clone());
+}
+
+fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
+    let header_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(Color::Cyan);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let help_lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled("  WHAT EACH TAB DOES", header_style)),
+        Line::from(Span::styled("  ==================", dim_style)),
+        Line::from(vec![
+            Span::styled("  Tracked Files  ", key_style),
+            Span::raw("View files you're backing up and their status"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Add Files      ", key_style),
+            Span::raw("Browse your computer to add files to backup"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Restore        ", key_style),
+            Span::raw("Recover files from previous backups"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  STATUS SYMBOLS (Tracked Files tab)", header_style)),
+        Line::from(Span::styled("  ===================================", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("(space)", Style::default().fg(Color::Green)),
+            Span::raw(" = Backed up and unchanged"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("M", Style::default().fg(Color::Yellow)),
+            Span::raw("       = Modified since last backup"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("+", Style::default().fg(Color::Cyan)),
+            Span::raw("       = New, not yet backed up"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("-", Style::default().fg(Color::DarkGray)),
+            Span::raw("       = Deleted from your system"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  MODE INDICATORS", header_style)),
+        Line::from(Span::styled("  ===============", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[I]", Style::default().fg(Color::Blue)),
+            Span::raw("    = Incremental backup (content-addressed, deduped)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[A]", Style::default().fg(Color::Magenta)),
+            Span::raw("    = Archive backup (compressed tarball)"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  NAVIGATION", header_style)),
+        Line::from(Span::styled("  ==========", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("j/Down", key_style),
+            Span::raw("      Move down          "),
+            Span::styled("Tab", key_style),
+            Span::raw("         Next tab"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("k/Up", key_style),
+            Span::raw("        Move up            "),
+            Span::styled("Shift+Tab", key_style),
+            Span::raw("   Previous tab"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("g", key_style),
+            Span::raw("           Go to top          "),
+            Span::styled("?/F1", key_style),
+            Span::raw("        Show this help"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("G", key_style),
+            Span::raw("           Go to bottom       "),
+            Span::styled("q", key_style),
+            Span::raw("           Quit (saves changes)"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  TRACKED FILES TAB", header_style)),
+        Line::from(Span::styled("  =================", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("b", key_style),
+            Span::raw("           Run backup now (auto message)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("B", key_style),
+            Span::raw("           Run backup with custom message"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("d/Delete", key_style),
+            Span::raw("    Stop tracking this file"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("r", key_style),
+            Span::raw("           Refresh list"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  ADD FILES TAB", header_style)),
+        Line::from(Span::styled("  =============", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter/l", key_style),
+            Span::raw("     Open folder / Add file to tracking"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("A", key_style),
+            Span::raw("           Add folder as pattern (with /**)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("R", key_style),
+            Span::raw("           Recursive add (select individual files)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Backspace/h", key_style),
+            Span::raw(" Go back to parent directory"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("~", key_style),
+            Span::raw("           Go to home folder"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("a", key_style),
+            Span::raw("           Type a path manually"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  RECURSIVE ADD PREVIEW", header_style)),
+        Line::from(Span::styled("  =====================", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Space", key_style),
+            Span::raw("       Toggle file selection"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Ctrl+A", key_style),
+            Span::raw("      Select/deselect all"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter", key_style),
+            Span::raw("       Confirm and add selected files"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Esc", key_style),
+            Span::raw("         Cancel and return to browser"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  RESTORE TAB", header_style)),
+        Line::from(Span::styled("  ===========", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter", key_style),
+            Span::raw("       Select backup / Restore file(s)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Backspace", key_style),
+            Span::raw("   Go back to backup list"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Space", key_style),
+            Span::raw("       Select multiple files"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  RESTORE SYMBOLS", header_style)),
+        Line::from(Span::styled("  ===============", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("NEW", Style::default().fg(Color::Cyan)),
+            Span::raw("     = File missing locally (will be created)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("CHG", Style::default().fg(Color::Yellow)),
+            Span::raw("     = Local file differs from backup"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("OK", Style::default().fg(Color::Green)),
+            Span::raw("      = Local file matches backup"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Note: Changes are saved when you quit (q)", dim_style)),
+        Line::from(""),
+        Line::from(Span::styled("  Scroll: Up/Down/j/k  |  Press any other key to close", dim_style)),
+    ];
+
+    let paragraph = Paragraph::new(help_lines)
         .block(Block::default().borders(Borders::ALL).title(" Help (scroll with arrows) "))
-        .style(Style::default().fg(Color::White))
         .scroll((scroll, 0));
 
     f.render_widget(paragraph, area);
@@ -1462,6 +2072,51 @@ fn render_add_input(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(hint_para, input_area[1]);
 }
 
+fn render_backup_input(f: &mut Frame, area: Rect, app: &App) {
+    let input_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    let input = Paragraph::new(app.backup_message_input.as_str())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Backup commit message (Enter to confirm, Esc to cancel) "),
+        )
+        .style(Style::default().fg(Color::Yellow));
+
+    f.render_widget(input, input_area[0]);
+
+    let hints = vec![
+        Line::from(""),
+        Line::from("  Enter a commit message for this backup:"),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::raw("  Run backup with this message"),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw("    Cancel backup"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Leave empty for auto-generated timestamp message", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
+    ];
+
+    let hint_para = Paragraph::new(hints)
+        .block(Block::default().borders(Borders::ALL).title(" Hints "))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(hint_para, input_area[1]);
+}
+
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let status = if let Some(ref msg) = app.message {
         msg.clone()
@@ -1470,14 +2125,14 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
         // Get total count based on current mode/view
         let (total, mode_hint) = match app.mode {
-            TuiMode::Status => (app.files.len(), "b: backup | d: remove"),
+            TuiMode::Status => (app.files.len(), "b: backup | B: backup+msg | d: remove"),
             TuiMode::Browse => {
                 match app.restore_view {
                     RestoreView::Commits => (app.commits.len(), "Enter: select backup"),
                     RestoreView::Files => (app.restore_files.len(), "Enter: restore | Backspace: back"),
                 }
             }
-            TuiMode::Add => (app.files.len(), "Enter: add file | a: type path"),
+            TuiMode::Add => (app.files.len(), "Enter: add/open | A: add folder | R: recursive"),
         };
 
         if selected_count > 0 {
@@ -1493,8 +2148,9 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
+    let version = env!("CARGO_PKG_VERSION");
     let status_bar = Paragraph::new(status)
-        .block(Block::default().borders(Borders::ALL))
+        .block(Block::default().borders(Borders::ALL).title(format!(" v{} ", version)))
         .style(Style::default().fg(Color::Cyan));
 
     f.render_widget(status_bar, area);
