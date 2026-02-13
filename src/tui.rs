@@ -582,7 +582,27 @@ impl App {
 
             let is_tracked = tracked.iter().any(|p| {
                 if let Ok(expanded) = scanner::expand_tilde(p) {
-                    expanded == path || path.starts_with(&expanded)
+                    // Direct match or path is within tracked directory
+                    if expanded == path || path.starts_with(&expanded) {
+                        return true;
+                    }
+                    // For folders: check if any pattern covers this folder
+                    // e.g., ~/.config/nvim/** means ~/.config/nvim/ is tracked
+                    if is_dir {
+                        let pattern_str = expanded.to_string_lossy();
+                        let path_str = path.to_string_lossy();
+                        // Check if pattern starts with this folder path
+                        if pattern_str.starts_with(&*path_str) {
+                            return true;
+                        }
+                        // Check patterns like "folder/**" or "folder/*"
+                        let folder_pattern = format!("{}/**", path_str);
+                        let folder_pattern2 = format!("{}/*", path_str);
+                        if pattern_str == folder_pattern || pattern_str == folder_pattern2 {
+                            return true;
+                        }
+                    }
+                    false
                 } else {
                     false
                 }
@@ -1056,6 +1076,77 @@ impl App {
         }
     }
 
+    /// Remove file/folder from tracking (in Add Files browser)
+    pub fn remove_from_tracking_in_browser(&mut self) {
+        if self.mode != TuiMode::Add {
+            return;
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if i >= self.files.len() {
+                return;
+            }
+
+            let file = &self.files[i];
+            if !file.is_tracked {
+                self.message = Some("Not tracked".to_string());
+                return;
+            }
+
+            // Build possible patterns for this path
+            let path_str = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = file.path.strip_prefix(&home) {
+                    format!("~/{}", rel.display())
+                } else {
+                    file.path.to_string_lossy().to_string()
+                }
+            } else {
+                file.path.to_string_lossy().to_string()
+            };
+
+            // Patterns to look for
+            let patterns_to_check: Vec<String> = if file.is_dir {
+                vec![
+                    format!("{}/**", path_str),
+                    format!("{}/*", path_str),
+                    path_str.clone(),
+                ]
+            } else {
+                vec![path_str.clone()]
+            };
+
+            // Find and remove matching patterns
+            let mut removed = Vec::new();
+            self.config.tracked_files.retain(|p| {
+                let dominated = patterns_to_check.iter().any(|check| p.path() == check);
+                if dominated {
+                    removed.push(p.path().to_string());
+                }
+                !dominated
+            });
+
+            // Also check for patterns that this path is within (for files)
+            if !file.is_dir && removed.is_empty() {
+                // File might be tracked via a parent folder pattern
+                self.message = Some("File tracked via folder pattern - remove the folder pattern instead".to_string());
+                return;
+            }
+
+            if !removed.is_empty() {
+                self.config_dirty = true;
+                let msg = if removed.len() == 1 {
+                    format!("Untracked: {} (no files deleted, saves on exit)", removed[0])
+                } else {
+                    format!("Untracked {} patterns (no files deleted, saves on exit)", removed.len())
+                };
+                self.message = Some(msg);
+                self.refresh_files();
+            } else {
+                self.message = Some("No matching pattern found".to_string());
+            }
+        }
+    }
+
     pub fn remove_from_index(&mut self) {
         let indices: Vec<_> = if self.selected.is_empty() {
             self.list_state.selected().into_iter().collect()
@@ -1398,9 +1489,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 }
                 KeyCode::Char('d') | KeyCode::Delete => {
                     // In Status mode, 'd' removes from tracking config
+                    // In Add mode, 'd' removes folder/file patterns from tracking
                     // In other modes, removes from index
                     if app.mode == TuiMode::Status {
                         app.toggle_tracking();  // This removes tracked files
+                    } else if app.mode == TuiMode::Add {
+                        app.remove_from_tracking_in_browser();
                     } else {
                         app.remove_from_index();
                     }
@@ -1962,6 +2056,11 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::styled("a", key_style),
             Span::raw("           Type a path manually"),
         ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("d", key_style),
+            Span::raw("           Untrack file/folder (no files deleted)"),
+        ]),
         Line::from(""),
         Line::from(Span::styled("  RECURSIVE ADD PREVIEW", header_style)),
         Line::from(Span::styled("  =====================", dim_style)),
@@ -2132,7 +2231,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                     RestoreView::Files => (app.restore_files.len(), "Enter: restore | Backspace: back"),
                 }
             }
-            TuiMode::Add => (app.files.len(), "Enter: add/open | A: add folder | R: recursive"),
+            TuiMode::Add => (app.files.len(), "Enter: add/open | A: folder | R: recursive | d: untrack"),
         };
 
         if selected_count > 0 {
