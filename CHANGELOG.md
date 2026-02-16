@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-02-16
+
+### Fixed
+- **Windows:** Fix double key input by filtering key release events
+
 ## [0.3.5] - 2026-02-16
 
 ### TUI File Viewer
