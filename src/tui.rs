@@ -3,7 +3,7 @@ use crate::index::Index;
 use crate::scanner::{self, RecursiveScanOptions, Verbosity};
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -1850,6 +1850,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         }
 
         if let Event::Key(key) = event::read()? {
+            // Only handle key press events (Windows sends both Press and Release)
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
             // Clear message on any keypress (but not while busy)
             if !app.busy {
                 app.message = None;
