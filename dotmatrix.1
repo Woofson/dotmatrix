@@ -117,14 +117,20 @@ Navigate file list
 .B Tab
 Switch between tabs
 .TP
+.B v
+View file contents with syntax highlighting (works in all tabs)
+.TP
 .B b
 Run backup (Tracked Files tab)
 .TP
+.B Right/l
+Expand folder (Tracked Files) / Enter directory (Add Files)
+.TP
+.B Left/h
+Collapse folder (Tracked Files) / Parent directory (Add Files)
+.TP
 .B Enter
 Add file / Select backup / Restore file(s)
-.TP
-.B Backspace
-Go back / Parent directory
 .TP
 .B ~
 Go to home directory (Add Files tab)
@@ -152,6 +158,25 @@ Show help
 .TP
 .B q
 Quit (saves changes)
+.RE
+.PP
+.B File viewer bindings (when viewing a file):
+.RS
+.TP
+.B j/k, Up/Down
+Scroll up/down
+.TP
+.B PgUp/PgDn
+Page up/down
+.TP
+.B g/Home
+Go to top
+.TP
+.B G/End
+Go to bottom
+.TP
+.B q/Esc
+Close viewer
 .RE
 .PP
 .B Status symbols (Tracked Files tab):

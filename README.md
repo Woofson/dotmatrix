@@ -161,9 +161,11 @@ dotmatrix tui
 |-----|--------|
 | `j/k`, arrows | Navigate |
 | `Tab` | Next tab |
+| `v` | View file contents (syntax highlighted) |
 | `b` | Run backup (Tracked Files tab) |
+| `Right/l` | Expand folder / Enter directory |
+| `Left/h` | Collapse folder / Parent directory |
 | `Enter` | Add file / Select backup / Restore |
-| `Backspace` | Go back / Parent directory |
 | `~` | Go to home (Add Files tab) |
 | `Space` | Select multiple items |
 | `a` | Type a path manually |

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### TUI File Viewer
+- **Added:** Press `v` to view file contents with syntax highlighting (works in all tabs)
+- **Added:** Folders show all files concatenated with clear headers when viewed
+- **Added:** Viewer navigation: `j/k` scroll, `PgUp/PgDn` page, `g/G` top/bottom, `q/Esc` close
+- **Added:** Files in conf.d style directories sorted by numeric prefix (e.g., `00-base.conf`, `10-custom.conf`)
+- **Changed:** Folder navigation now uses `Right` to expand and `Left` to collapse (tree-style)
+
 ## [0.3.2] - 2026-02-12
 
 ### TUI Help Improvements
