@@ -22,9 +22,19 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
+use syntect::highlighting::{ThemeSet, Style as SyntectStyle};
+use syntect::parsing::SyntaxSet;
+use syntect::easy::HighlightLines;
 
 /// Spinner frames for busy indicator
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A single line in the viewer with syntax highlighting spans
+#[derive(Debug, Clone)]
+pub struct ViewerLine {
+    pub spans: Vec<(String, Style)>,  // Text segments with ratatui styling
+    pub file_header: bool,            // True if this is a file separator line
+}
 
 /// TUI application mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +210,14 @@ pub struct App {
     pub backup_receiver: Option<Receiver<BackupResult>>,
     // Tree view state (for Status tab)
     pub expanded_folders: HashSet<PathBuf>,
+    // File viewer state
+    pub viewer_visible: bool,
+    pub viewer_content: Vec<ViewerLine>,
+    pub viewer_scroll: usize,
+    pub viewer_title: String,
+    // Syntax highlighting resources
+    pub syntax_set: SyntaxSet,
+    pub theme_set: ThemeSet,
 }
 
 /// Result from background backup operation
@@ -244,6 +262,12 @@ impl App {
             spinner_frame: 0,
             backup_receiver: None,
             expanded_folders: HashSet::new(),
+            viewer_visible: false,
+            viewer_content: Vec::new(),
+            viewer_scroll: 0,
+            viewer_title: String::new(),
+            syntax_set: SyntaxSet::load_defaults_newlines(),
+            theme_set: ThemeSet::load_defaults(),
         };
         app.refresh_files();
         app.load_commits();
@@ -658,6 +682,44 @@ impl App {
                     }
                     self.refresh_files();
                     // Try to keep selection on the same folder
+                    self.list_state.select(Some(i.min(self.files.len().saturating_sub(1))));
+                }
+            }
+        }
+    }
+
+    /// Expand selected folder in tree view (right arrow)
+    pub fn expand_folder(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if i < self.files.len() {
+                let file = &self.files[i];
+                if file.is_folder_node && !self.expanded_folders.contains(&file.path) {
+                    let path = file.path.clone();
+                    self.expanded_folders.insert(path);
+                    self.refresh_files();
+                    self.list_state.select(Some(i.min(self.files.len().saturating_sub(1))));
+                }
+            }
+        }
+    }
+
+    /// Collapse selected folder in tree view (left arrow)
+    pub fn collapse_folder(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if i < self.files.len() {
+                let file = &self.files[i];
+                if file.is_folder_node && self.expanded_folders.contains(&file.path) {
+                    let path = file.path.clone();
+                    self.expanded_folders.remove(&path);
+                    self.refresh_files();
                     self.list_state.select(Some(i.min(self.files.len().saturating_sub(1))));
                 }
             }
@@ -1477,6 +1539,166 @@ impl App {
         }
     }
 
+    /// Open file viewer for the selected item
+    pub fn open_viewer(&mut self) {
+        // Get the path to view based on current mode
+        let path = match self.mode {
+            TuiMode::Status => {
+                if let Some(i) = self.list_state.selected() {
+                    if i < self.files.len() {
+                        self.files[i].path.clone()
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            TuiMode::Add => {
+                if let Some(i) = self.list_state.selected() {
+                    if i < self.files.len() {
+                        self.files[i].path.clone()
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            TuiMode::Browse => {
+                if self.restore_view == RestoreView::Files {
+                    if let Some(i) = self.restore_list_state.selected() {
+                        if i < self.restore_files.len() {
+                            self.restore_files[i].path.clone()
+                        } else {
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                } else {
+                    self.message = Some("Select a backup first, then select a file to view".to_string());
+                    return;
+                }
+            }
+        };
+
+        // Load content based on whether it's a file or directory
+        if path.is_dir() {
+            self.viewer_content = self.load_folder_content(&path);
+            self.viewer_title = self.display_path(&path);
+        } else if path.is_file() {
+            self.viewer_content = self.load_file_content(&path);
+            self.viewer_title = self.display_path(&path);
+        } else {
+            self.message = Some("File not found".to_string());
+            return;
+        }
+
+        if self.viewer_content.is_empty() {
+            self.message = Some("File is empty or could not be read".to_string());
+            return;
+        }
+
+        self.viewer_visible = true;
+        self.viewer_scroll = 0;
+    }
+
+    /// Load and highlight a single file's content
+    fn load_file_content(&self, path: &Path) -> Vec<ViewerLine> {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        self.highlight_content(&content, path)
+    }
+
+    /// Load folder as concatenated files with headers
+    fn load_folder_content(&self, path: &Path) -> Vec<ViewerLine> {
+        let entries = match fs::read_dir(path) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+
+        // Collect files only (skip subdirectories)
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+
+        // Sort files: numeric prefix first, then alphabetically
+        sort_config_files(&mut files);
+
+        let mut result = Vec::new();
+
+        for file_path in files {
+            // Add file header
+            let file_name = file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "???".to_string());
+            let header = format!("─────────────── {} ───────────────", file_name);
+            result.push(ViewerLine {
+                spans: vec![(header, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))],
+                file_header: true,
+            });
+
+            // Add file content
+            if let Ok(content) = fs::read_to_string(&file_path) {
+                let highlighted = self.highlight_content(&content, &file_path);
+                result.extend(highlighted);
+            }
+
+            // Add blank line between files
+            result.push(ViewerLine {
+                spans: vec![("".to_string(), Style::default())],
+                file_header: false,
+            });
+        }
+
+        result
+    }
+
+    /// Highlight content using syntect
+    fn highlight_content(&self, content: &str, path: &Path) -> Vec<ViewerLine> {
+        let syntax = self.syntax_set
+            .find_syntax_for_file(path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+
+        let theme = &self.theme_set.themes["base16-ocean.dark"];
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
+        content
+            .lines()
+            .map(|line| {
+                let ranges = highlighter
+                    .highlight_line(line, &self.syntax_set)
+                    .unwrap_or_default();
+                ViewerLine {
+                    spans: ranges
+                        .iter()
+                        .map(|(style, text)| {
+                            (text.to_string(), syntect_to_ratatui_style(style))
+                        })
+                        .collect(),
+                    file_header: false,
+                }
+            })
+            .collect()
+    }
+
+    /// Close the file viewer
+    pub fn close_viewer(&mut self) {
+        self.viewer_visible = false;
+        self.viewer_content.clear();
+        self.viewer_scroll = 0;
+        self.viewer_title.clear();
+    }
+
     /// Perform backup of selected or all tracked files (async)
     pub fn perform_backup(&mut self, custom_message: Option<String>) {
         use chrono::Local;
@@ -1668,6 +1890,39 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
+            // Handle file viewer mode
+            if app.viewer_visible {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        app.close_viewer();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let max_scroll = app.viewer_content.len().saturating_sub(1);
+                        if app.viewer_scroll < max_scroll {
+                            app.viewer_scroll += 1;
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.viewer_scroll = app.viewer_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown => {
+                        let max_scroll = app.viewer_content.len().saturating_sub(1);
+                        app.viewer_scroll = (app.viewer_scroll + 20).min(max_scroll);
+                    }
+                    KeyCode::PageUp => {
+                        app.viewer_scroll = app.viewer_scroll.saturating_sub(20);
+                    }
+                    KeyCode::Char('g') | KeyCode::Home => {
+                        app.viewer_scroll = 0;
+                    }
+                    KeyCode::Char('G') | KeyCode::End => {
+                        app.viewer_scroll = app.viewer_content.len().saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             // Handle recursive preview mode
             if app.add_sub_mode == AddSubMode::RecursivePreview {
                 match key.code {
@@ -1812,10 +2067,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             }
                         }
                         TuiMode::Status => {
-                            // In Status mode, Enter toggles folder expansion
+                            // In Status mode, Right/Enter expands folder
                             if let Some(i) = app.list_state.selected() {
                                 if i < app.files.len() && app.files[i].is_folder_node {
-                                    app.toggle_folder();
+                                    app.expand_folder();
                                 } else {
                                     app.message = Some("Press 'b' to backup, 'd' to remove from tracking".to_string());
                                 }
@@ -1855,8 +2110,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
                     // In Add mode, go to parent directory
                     // In Restore mode files view, go back to commits
+                    // In Status mode, collapse folder
                     if app.mode == TuiMode::Add {
                         app.parent_directory();
+                    } else if app.mode == TuiMode::Status {
+                        app.collapse_folder();
                     } else if app.mode == TuiMode::Browse && app.restore_view == RestoreView::Files {
                         app.back_to_commits();
                     }
@@ -1925,6 +2183,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     // Collapse all folders (Status mode)
                     app.collapse_all_folders();
                 }
+                KeyCode::Char('v') => {
+                    // View file contents
+                    app.open_viewer();
+                }
                 _ => {}
             }
         }
@@ -1970,6 +2232,8 @@ fn ui(f: &mut Frame, app: &App) {
     // Main content
     if app.show_help {
         render_help(f, chunks[1], app.help_scroll);
+    } else if app.viewer_visible {
+        render_viewer(f, chunks[1], app);
     } else if app.add_mode {
         render_add_input(f, chunks[1], app);
     } else if app.backup_message_mode {
@@ -2461,7 +2725,9 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
         Line::from(vec![
             Span::raw("  "),
             Span::styled("PgDn/PgUp", key_style),
-            Span::raw("   Page down/up"),
+            Span::raw("   Page down/up       "),
+            Span::styled("v", key_style),
+            Span::raw("           View file contents"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  TRACKED FILES TAB", header_style)),
@@ -2488,8 +2754,13 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
         ]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("Enter", key_style),
-            Span::raw("       Expand/collapse folder"),
+            Span::styled("Right/l", key_style),
+            Span::raw("     Expand folder"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Left/h", key_style),
+            Span::raw("      Collapse folder"),
         ]),
         Line::from(vec![
             Span::raw("  "),
@@ -2707,7 +2978,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
         // Get total count based on current mode/view
         let (total, mode_hint) = match app.mode {
-            TuiMode::Status => (app.files.len(), "Enter: expand folder | b: backup | d: remove | e/E: expand/collapse all"),
+            TuiMode::Status => (app.files.len(), "Right: expand | Left: collapse | b: backup | d: remove | v: view"),
             TuiMode::Browse => {
                 match app.restore_view {
                     RestoreView::Commits => (app.commits.len(), "Enter: select backup"),
@@ -2737,4 +3008,87 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         .style(style);
 
     f.render_widget(status_bar, area);
+}
+
+fn render_viewer(f: &mut Frame, area: Rect, app: &App) {
+    // Calculate visible height (subtract 2 for borders)
+    let visible_height = area.height.saturating_sub(2) as usize;
+
+    let lines: Vec<Line> = app.viewer_content
+        .iter()
+        .skip(app.viewer_scroll)
+        .take(visible_height)
+        .map(|vl| {
+            if vl.file_header {
+                // File header line - use first span's text
+                let text = vl.spans.first()
+                    .map(|(t, _)| t.clone())
+                    .unwrap_or_default();
+                Line::from(Span::styled(
+                    text,
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                // Regular content line - convert all spans
+                Line::from(
+                    vl.spans
+                        .iter()
+                        .map(|(text, style)| Span::styled(text.clone(), *style))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        })
+        .collect();
+
+    let total_lines = app.viewer_content.len();
+    let scroll_pos = if total_lines > 0 {
+        format!(" {}/{} ", app.viewer_scroll + 1, total_lines)
+    } else {
+        " 0/0 ".to_string()
+    };
+
+    let title = format!(" {} (q:close  j/k:scroll  g/G:top/bottom) {} ", app.viewer_title, scroll_pos);
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title));
+
+    f.render_widget(paragraph, area);
+}
+
+/// Sort files for conf.d style directories: numeric prefix first, then alphabetically
+fn sort_config_files(files: &mut Vec<PathBuf>) {
+    files.sort_by(|a, b| {
+        let a_name = a.file_name().unwrap_or_default().to_string_lossy();
+        let b_name = b.file_name().unwrap_or_default().to_string_lossy();
+
+        // Extract leading numbers
+        let a_num: Option<u32> = a_name
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok();
+        let b_num: Option<u32> = b_name
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .ok();
+
+        match (a_num, b_num) {
+            (Some(an), Some(bn)) => an.cmp(&bn).then(a_name.cmp(&b_name)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a_name.cmp(&b_name),
+        }
+    });
+}
+
+/// Convert syntect style to ratatui style
+fn syntect_to_ratatui_style(style: &SyntectStyle) -> Style {
+    Style::default().fg(Color::Rgb(
+        style.foreground.r,
+        style.foreground.g,
+        style.foreground.b,
+    ))
 }
