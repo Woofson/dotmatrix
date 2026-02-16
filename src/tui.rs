@@ -19,6 +19,12 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::Duration;
+
+/// Spinner frames for busy indicator
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// TUI application mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +67,12 @@ pub struct DisplayFile {
     pub is_tracked: bool,
     pub backup_mode: Option<BackupMode>,
     pub is_dir: bool,
+    // Tree view fields (for Status tab)
+    pub depth: usize,           // Indentation level in tree
+    pub is_folder_node: bool,   // True if this is a virtual folder node
+    pub child_count: usize,     // Number of files in folder (for folder nodes)
+    pub modified_count: usize,  // Number of modified files in folder
+    pub new_count: usize,       // Number of new files in folder
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +193,19 @@ pub struct App {
     // Recursive add state
     pub add_sub_mode: AddSubMode,
     pub recursive_preview: Option<RecursivePreviewState>,
+    // Busy/spinner state
+    pub busy: bool,
+    pub busy_message: String,
+    pub spinner_frame: usize,
+    pub backup_receiver: Option<Receiver<BackupResult>>,
+    // Tree view state (for Status tab)
+    pub expanded_folders: HashSet<PathBuf>,
+}
+
+/// Result from background backup operation
+pub struct BackupResult {
+    pub success: bool,
+    pub message: String,
 }
 
 impl App {
@@ -214,6 +239,11 @@ impl App {
             restore_list_state: ListState::default(),
             add_sub_mode: AddSubMode::Browse,
             recursive_preview: None,
+            busy: false,
+            busy_message: String::new(),
+            spinner_frame: 0,
+            backup_receiver: None,
+            expanded_folders: HashSet::new(),
         };
         app.refresh_files();
         app.load_commits();
@@ -261,6 +291,14 @@ impl App {
             self.index_dirty = false;
         }
         Ok(())
+    }
+
+    /// Reload index from disk (after external changes like backup)
+    pub fn reload_index(&mut self) {
+        if let Ok(index) = Index::load(&self.index_path) {
+            self.index = index;
+            self.index_dirty = false;
+        }
     }
 
     /// Select a commit and load its files for restore
@@ -476,6 +514,7 @@ impl App {
         .unwrap_or_default();
 
         let current_set: HashSet<_> = files.iter().cloned().collect();
+        let mut all_files = Vec::new();
 
         // Check files in current patterns
         for file in &files {
@@ -497,7 +536,7 @@ impl App {
             let size = fs::metadata(file).map(|m| m.len()).ok();
             let backup_mode = self.get_file_mode(file);
 
-            self.files.push(DisplayFile {
+            all_files.push(DisplayFile {
                 path: file.clone(),
                 display_path: self.display_path(file),
                 status,
@@ -506,13 +545,18 @@ impl App {
                 is_tracked: true,
                 backup_mode: Some(backup_mode),
                 is_dir: false,
+                depth: 0,
+                is_folder_node: false,
+                child_count: 0,
+                modified_count: 0,
+                new_count: 0,
             });
         }
 
         // Add deleted files from index
         for (path, entry) in &self.index.files {
             if !current_set.contains(path) {
-                self.files.push(DisplayFile {
+                all_files.push(DisplayFile {
                     path: path.clone(),
                     display_path: self.display_path(path),
                     status: FileStatus::Deleted,
@@ -521,12 +565,125 @@ impl App {
                     is_tracked: true,
                     backup_mode: None,
                     is_dir: false,
+                    depth: 0,
+                    is_folder_node: false,
+                    child_count: 0,
+                    modified_count: 0,
+                    new_count: 0,
                 });
             }
         }
 
         // Sort by path
-        self.files.sort_by(|a, b| a.path.cmp(&b.path));
+        all_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // Build tree view
+        self.build_tree_view(all_files);
+    }
+
+    /// Build tree view from flat file list
+    fn build_tree_view(&mut self, all_files: Vec<DisplayFile>) {
+        use std::collections::BTreeMap;
+
+        // Group files by their parent folder
+        let mut folders: BTreeMap<PathBuf, Vec<DisplayFile>> = BTreeMap::new();
+
+        for file in all_files {
+            let parent = file.path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("/"));
+            folders.entry(parent).or_default().push(file);
+        }
+
+        // Build the display list with folder nodes
+        for (folder_path, files) in folders {
+            // Calculate folder stats
+            let child_count = files.len();
+            let modified_count = files.iter().filter(|f| f.status == FileStatus::Modified).count();
+            let new_count = files.iter().filter(|f| f.status == FileStatus::New).count();
+
+            // Create folder display name
+            let folder_display = self.display_path(&folder_path);
+
+            // Add folder node
+            self.files.push(DisplayFile {
+                path: folder_path.clone(),
+                display_path: folder_display,
+                status: if modified_count > 0 || new_count > 0 {
+                    FileStatus::Modified
+                } else {
+                    FileStatus::Unchanged
+                },
+                size: None,
+                backup_size: None,
+                is_tracked: true,
+                backup_mode: None,
+                is_dir: true,
+                depth: 0,
+                is_folder_node: true,
+                child_count,
+                modified_count,
+                new_count,
+            });
+
+            // Add files if folder is expanded
+            if self.expanded_folders.contains(&folder_path) {
+                for mut file in files {
+                    // Show just filename when nested under folder
+                    file.display_path = file.path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file.display_path.clone());
+                    file.depth = 1;
+                    self.files.push(file);
+                }
+            }
+        }
+    }
+
+    /// Toggle folder expansion in tree view
+    pub fn toggle_folder(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if i < self.files.len() {
+                let file = &self.files[i];
+                if file.is_folder_node {
+                    let path = file.path.clone();
+                    if self.expanded_folders.contains(&path) {
+                        self.expanded_folders.remove(&path);
+                    } else {
+                        self.expanded_folders.insert(path);
+                    }
+                    self.refresh_files();
+                    // Try to keep selection on the same folder
+                    self.list_state.select(Some(i.min(self.files.len().saturating_sub(1))));
+                }
+            }
+        }
+    }
+
+    /// Expand all folders in tree view
+    pub fn expand_all_folders(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+        for file in &self.files {
+            if file.is_folder_node {
+                self.expanded_folders.insert(file.path.clone());
+            }
+        }
+        self.refresh_files();
+    }
+
+    /// Collapse all folders in tree view
+    pub fn collapse_all_folders(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+        self.expanded_folders.clear();
+        self.refresh_files();
     }
 
     fn load_addable_files(&mut self) {
@@ -627,6 +784,11 @@ impl App {
                 is_tracked,
                 backup_mode: None,
                 is_dir,
+                depth: 0,
+                is_folder_node: false,
+                child_count: 0,
+                modified_count: 0,
+                new_count: 0,
             });
         }
     }
@@ -724,6 +886,32 @@ impl App {
         self.set_current_selection(i);
     }
 
+    pub fn page_down(&mut self) {
+        let (len, list_state) = self.get_current_list_info();
+        if len == 0 {
+            return;
+        }
+        let page_size = 10;
+        let i = match list_state.selected() {
+            Some(i) => (i + page_size).min(len - 1),
+            None => 0,
+        };
+        self.set_current_selection(i);
+    }
+
+    pub fn page_up(&mut self) {
+        let (len, list_state) = self.get_current_list_info();
+        if len == 0 {
+            return;
+        }
+        let page_size = 10;
+        let i = match list_state.selected() {
+            Some(i) => i.saturating_sub(page_size),
+            None => 0,
+        };
+        self.set_current_selection(i);
+    }
+
     /// Get current list length and state based on mode
     fn get_current_list_info(&self) -> (usize, &ListState) {
         if self.mode == TuiMode::Browse {
@@ -815,48 +1003,90 @@ impl App {
     }
 
     pub fn toggle_tracking(&mut self) {
-        if let Some(i) = self.list_state.selected() {
-            if i < self.files.len() {
-                let file = &self.files[i];
+        // Get indices to operate on: selected items or current item
+        let indices: Vec<usize> = if self.selected.is_empty() {
+            self.list_state.selected().into_iter().collect()
+        } else {
+            self.selected.iter().cloned().collect()
+        };
 
-                // In Add mode, display_path is just the filename, so use full path
-                let pattern = if self.mode == TuiMode::Add {
-                    if let Some(home) = dirs::home_dir() {
-                        if let Ok(rel) = file.path.strip_prefix(&home) {
-                            format!("~/{}", rel.display())
-                        } else {
-                            file.path.to_string_lossy().to_string()
-                        }
+        if indices.is_empty() {
+            return;
+        }
+
+        let mut added = 0;
+        let mut removed = 0;
+
+        // Collect patterns to add/remove (avoid borrowing issues)
+        let mut patterns_to_add = Vec::new();
+        let mut patterns_to_remove = Vec::new();
+
+        for i in &indices {
+            if *i >= self.files.len() {
+                continue;
+            }
+            let file = &self.files[*i];
+
+            // Skip directories in bulk operations (use A for folders)
+            if file.is_dir {
+                continue;
+            }
+
+            // Build pattern from path
+            let pattern = if self.mode == TuiMode::Add {
+                if let Some(home) = dirs::home_dir() {
+                    if let Ok(rel) = file.path.strip_prefix(&home) {
+                        format!("~/{}", rel.display())
                     } else {
                         file.path.to_string_lossy().to_string()
                     }
                 } else {
-                    file.display_path.clone()
-                };
-
-                if file.is_tracked {
-                    // Remove from tracking
-                    if let Some(pos) = self
-                        .config
-                        .tracked_files
-                        .iter()
-                        .position(|p| p.path() == pattern)
-                    {
-                        self.config.tracked_files.remove(pos);
-                        self.config_dirty = true;
-                        self.message = Some(format!("Removed: {} (saves on exit)", pattern));
-                    }
-                } else {
-                    // Add to tracking
-                    self.config
-                        .tracked_files
-                        .push(TrackedPattern::simple(&pattern));
-                    self.config_dirty = true;
-                    self.message = Some(format!("Added: {} (saves on exit)", pattern));
+                    file.path.to_string_lossy().to_string()
                 }
+            } else {
+                file.display_path.clone()
+            };
 
-                self.refresh_files();
+            if file.is_tracked {
+                patterns_to_remove.push(pattern);
+            } else {
+                patterns_to_add.push(pattern);
             }
+        }
+
+        // Remove patterns
+        for pattern in patterns_to_remove {
+            if let Some(pos) = self
+                .config
+                .tracked_files
+                .iter()
+                .position(|p| p.path() == pattern)
+            {
+                self.config.tracked_files.remove(pos);
+                removed += 1;
+            }
+        }
+
+        // Add patterns
+        for pattern in patterns_to_add {
+            self.config
+                .tracked_files
+                .push(TrackedPattern::simple(&pattern));
+            added += 1;
+        }
+
+        if added > 0 || removed > 0 {
+            self.config_dirty = true;
+            let msg = match (added, removed) {
+                (a, 0) if a == 1 => "Added 1 file (saves on exit)".to_string(),
+                (a, 0) => format!("Added {} files (saves on exit)", a),
+                (0, r) if r == 1 => "Removed 1 file (saves on exit)".to_string(),
+                (0, r) => format!("Removed {} files (saves on exit)", r),
+                (a, r) => format!("Added {}, removed {} files (saves on exit)", a, r),
+            };
+            self.message = Some(msg);
+            self.selected.clear();
+            self.refresh_files();
         }
     }
 
@@ -1034,45 +1264,110 @@ impl App {
         }
     }
 
-    /// Add selected folder as a pattern (with /** suffix)
+    pub fn preview_page_down(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            let len = preview.preview_files.len();
+            if len == 0 {
+                return;
+            }
+            let page_size = 10;
+            let i = match preview.preview_list_state.selected() {
+                Some(i) => (i + page_size).min(len - 1),
+                None => 0,
+            };
+            preview.preview_list_state.select(Some(i));
+        }
+    }
+
+    pub fn preview_page_up(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            let len = preview.preview_files.len();
+            if len == 0 {
+                return;
+            }
+            let page_size = 10;
+            let i = match preview.preview_list_state.selected() {
+                Some(i) => i.saturating_sub(page_size),
+                None => 0,
+            };
+            preview.preview_list_state.select(Some(i));
+        }
+    }
+
+    /// Add selected folder(s) as pattern(s) (with /** suffix)
     pub fn add_folder_pattern(&mut self) {
         if self.mode != TuiMode::Add {
             return;
         }
 
-        if let Some(i) = self.list_state.selected() {
-            if i < self.files.len() {
-                let file = &self.files[i];
+        // Get indices to operate on: selected items or current item
+        let indices: Vec<usize> = if self.selected.is_empty() {
+            self.list_state.selected().into_iter().collect()
+        } else {
+            self.selected.iter().cloned().collect()
+        };
 
-                if !file.is_dir {
-                    // For files, just toggle tracking
-                    self.toggle_tracking();
-                    return;
-                }
+        if indices.is_empty() {
+            return;
+        }
 
-                // Build pattern with /** suffix
-                let pattern = if let Some(home) = dirs::home_dir() {
-                    if let Ok(rel) = file.path.strip_prefix(&home) {
-                        format!("~/{}/**", rel.display())
-                    } else {
-                        format!("{}/**", file.path.display())
-                    }
+        // If single non-dir item selected, delegate to toggle_tracking
+        if indices.len() == 1 {
+            let i = indices[0];
+            if i < self.files.len() && !self.files[i].is_dir {
+                self.toggle_tracking();
+                return;
+            }
+        }
+
+        let mut added = 0;
+        let mut skipped = 0;
+
+        for i in &indices {
+            if *i >= self.files.len() {
+                continue;
+            }
+            let file = &self.files[*i];
+
+            if !file.is_dir {
+                skipped += 1;
+                continue;
+            }
+
+            // Build pattern with /** suffix
+            let pattern = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = file.path.strip_prefix(&home) {
+                    format!("~/{}/**", rel.display())
                 } else {
                     format!("{}/**", file.path.display())
-                };
-
-                // Check if already tracked
-                let already_tracked = self.config.tracked_files.iter().any(|p| p.path() == pattern);
-                if already_tracked {
-                    self.message = Some(format!("Already tracked: {}", pattern));
-                    return;
                 }
+            } else {
+                format!("{}/**", file.path.display())
+            };
 
-                self.config.tracked_files.push(TrackedPattern::simple(&pattern));
-                self.config_dirty = true;
-                self.message = Some(format!("Added: {} (saves on exit)", pattern));
-                self.refresh_files();
+            // Check if already tracked
+            let already_tracked = self.config.tracked_files.iter().any(|p| p.path() == pattern);
+            if already_tracked {
+                skipped += 1;
+                continue;
             }
+
+            self.config.tracked_files.push(TrackedPattern::simple(&pattern));
+            added += 1;
+        }
+
+        if added > 0 {
+            self.config_dirty = true;
+            let msg = if added == 1 {
+                "Added 1 folder (saves on exit)".to_string()
+            } else {
+                format!("Added {} folders (saves on exit)", added)
+            };
+            self.message = Some(msg);
+            self.selected.clear();
+            self.refresh_files();
+        } else if skipped > 0 {
+            self.message = Some("No new folders to add (already tracked or not folders)".to_string());
         }
     }
 
@@ -1082,15 +1377,28 @@ impl App {
             return;
         }
 
-        if let Some(i) = self.list_state.selected() {
-            if i >= self.files.len() {
-                return;
+        // Get indices to operate on: selected items or current item
+        let indices: Vec<usize> = if self.selected.is_empty() {
+            self.list_state.selected().into_iter().collect()
+        } else {
+            self.selected.iter().cloned().collect()
+        };
+
+        if indices.is_empty() {
+            return;
+        }
+
+        // Collect all patterns to check for removal
+        let mut all_patterns_to_check: Vec<String> = Vec::new();
+
+        for i in &indices {
+            if *i >= self.files.len() {
+                continue;
             }
 
-            let file = &self.files[i];
+            let file = &self.files[*i];
             if !file.is_tracked {
-                self.message = Some("Not tracked".to_string());
-                return;
+                continue;
             }
 
             // Build possible patterns for this path
@@ -1105,45 +1413,42 @@ impl App {
             };
 
             // Patterns to look for
-            let patterns_to_check: Vec<String> = if file.is_dir {
-                vec![
-                    format!("{}/**", path_str),
-                    format!("{}/*", path_str),
-                    path_str.clone(),
-                ]
+            if file.is_dir {
+                all_patterns_to_check.push(format!("{}/**", path_str));
+                all_patterns_to_check.push(format!("{}/*", path_str));
+                all_patterns_to_check.push(path_str);
             } else {
-                vec![path_str.clone()]
+                all_patterns_to_check.push(path_str);
+            }
+        }
+
+        if all_patterns_to_check.is_empty() {
+            self.message = Some("No tracked items selected".to_string());
+            return;
+        }
+
+        // Find and remove matching patterns
+        let mut removed = Vec::new();
+        self.config.tracked_files.retain(|p| {
+            let dominated = all_patterns_to_check.iter().any(|check| p.path() == check);
+            if dominated {
+                removed.push(p.path().to_string());
+            }
+            !dominated
+        });
+
+        if !removed.is_empty() {
+            self.config_dirty = true;
+            let msg = if removed.len() == 1 {
+                format!("Untracked: {} (no files deleted, saves on exit)", removed[0])
+            } else {
+                format!("Untracked {} patterns (no files deleted, saves on exit)", removed.len())
             };
-
-            // Find and remove matching patterns
-            let mut removed = Vec::new();
-            self.config.tracked_files.retain(|p| {
-                let dominated = patterns_to_check.iter().any(|check| p.path() == check);
-                if dominated {
-                    removed.push(p.path().to_string());
-                }
-                !dominated
-            });
-
-            // Also check for patterns that this path is within (for files)
-            if !file.is_dir && removed.is_empty() {
-                // File might be tracked via a parent folder pattern
-                self.message = Some("File tracked via folder pattern - remove the folder pattern instead".to_string());
-                return;
-            }
-
-            if !removed.is_empty() {
-                self.config_dirty = true;
-                let msg = if removed.len() == 1 {
-                    format!("Untracked: {} (no files deleted, saves on exit)", removed[0])
-                } else {
-                    format!("Untracked {} patterns (no files deleted, saves on exit)", removed.len())
-                };
-                self.message = Some(msg);
-                self.refresh_files();
-            } else {
-                self.message = Some("No matching pattern found".to_string());
-            }
+            self.message = Some(msg);
+            self.selected.clear();
+            self.refresh_files();
+        } else {
+            self.message = Some("Files tracked via folder patterns - remove the folder pattern instead".to_string());
         }
     }
 
@@ -1172,11 +1477,15 @@ impl App {
         }
     }
 
-    /// Perform backup of selected or all tracked files
+    /// Perform backup of selected or all tracked files (async)
     pub fn perform_backup(&mut self, custom_message: Option<String>) {
         use chrono::Local;
 
-        self.message = Some("Running backup...".to_string());
+        // Don't start another backup if one is already running
+        if self.busy {
+            self.message = Some("Backup already in progress...".to_string());
+            return;
+        }
 
         // Use custom message or generate timestamp-based commit message
         let commit_msg = custom_message.unwrap_or_else(|| {
@@ -1193,27 +1502,45 @@ impl App {
             }
         };
 
-        // Run backup command using the current executable
-        let output = std::process::Command::new(&exe_path)
-            .args(["backup", "--message", &commit_msg])
-            .output();
+        // Set busy state
+        self.busy = true;
+        self.busy_message = format!("Backing up: {}", commit_msg);
+        self.spinner_frame = 0;
 
-        match output {
-            Ok(output) => {
-                if output.status.success() {
-                    self.message = Some(format!("Backup complete: {}", commit_msg));
-                    // Reload commits after backup
-                    self.load_commits();
-                    self.refresh_files();
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    self.message = Some(format!("Backup failed: {}", stderr.trim()));
+        // Create channel for result
+        let (tx, rx) = mpsc::channel();
+        self.backup_receiver = Some(rx);
+
+        // Spawn backup thread
+        let commit_msg_clone = commit_msg.clone();
+        thread::spawn(move || {
+            let output = std::process::Command::new(&exe_path)
+                .args(["backup", "--message", &commit_msg_clone])
+                .output();
+
+            let result = match output {
+                Ok(output) => {
+                    if output.status.success() {
+                        BackupResult {
+                            success: true,
+                            message: format!("Backup complete: {}", commit_msg_clone),
+                        }
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        BackupResult {
+                            success: false,
+                            message: format!("Backup failed: {}", stderr.trim()),
+                        }
+                    }
                 }
-            }
-            Err(e) => {
-                self.message = Some(format!("Backup error: {}", e));
-            }
-        }
+                Err(e) => BackupResult {
+                    success: false,
+                    message: format!("Backup error: {}", e),
+                },
+            };
+
+            let _ = tx.send(result);
+        });
     }
 }
 
@@ -1259,9 +1586,61 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
     loop {
         terminal.draw(|f| ui(f, app))?;
 
+        // Check for background task completion
+        if let Some(ref receiver) = app.backup_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    app.busy = false;
+                    app.busy_message.clear();
+                    app.backup_receiver = None;
+                    if result.success {
+                        app.message = Some(result.message);
+                        app.reload_index();
+                        app.load_commits();
+                        app.refresh_files();
+                    } else {
+                        app.message = Some(result.message);
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    // Still running, update spinner
+                    app.spinner_frame = (app.spinner_frame + 1) % SPINNER_FRAMES.len();
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // Thread died unexpectedly
+                    app.busy = false;
+                    app.busy_message.clear();
+                    app.backup_receiver = None;
+                    app.message = Some("Backup process disconnected unexpectedly".to_string());
+                }
+            }
+        }
+
+        // Poll for events with timeout (allows spinner to animate)
+        let poll_timeout = if app.busy {
+            Duration::from_millis(80) // Fast polling for spinner animation
+        } else {
+            Duration::from_millis(250) // Slower polling when idle
+        };
+
+        if !event::poll(poll_timeout)? {
+            continue; // No event, loop again (updates spinner)
+        }
+
         if let Event::Key(key) = event::read()? {
-            // Clear message on any keypress
-            app.message = None;
+            // Clear message on any keypress (but not while busy)
+            if !app.busy {
+                app.message = None;
+            }
+
+            // Ignore most keys while busy (allow quit)
+            if app.busy {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                    // Allow quitting while busy (backup continues in background)
+                    app.should_quit = true;
+                }
+                continue;
+            }
 
             if app.show_help {
                 match key.code {
@@ -1310,6 +1689,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.toggle_all_preview_files();
+                    }
+                    KeyCode::PageDown => {
+                        app.preview_page_down();
+                    }
+                    KeyCode::PageUp => {
+                        app.preview_page_up();
                     }
                     KeyCode::Char('q') => {
                         app.cancel_recursive_preview();
@@ -1427,8 +1812,14 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             }
                         }
                         TuiMode::Status => {
-                            // In Status mode, Enter does nothing (use 'b' to backup)
-                            app.message = Some("Press 'b' to backup, 'd' to remove from tracking".to_string());
+                            // In Status mode, Enter toggles folder expansion
+                            if let Some(i) = app.list_state.selected() {
+                                if i < app.files.len() && app.files[i].is_folder_node {
+                                    app.toggle_folder();
+                                } else {
+                                    app.message = Some("Press 'b' to backup, 'd' to remove from tracking".to_string());
+                                }
+                            }
                         }
                         TuiMode::Browse => {
                             // In Restore mode, Enter selects commit or restores files
@@ -1500,6 +1891,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                 }
                 KeyCode::Char('r') => {
+                    app.reload_index();
                     app.refresh_files();
                     app.message = Some("Refreshed".to_string());
                 }
@@ -1518,6 +1910,20 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     if !app.files.is_empty() {
                         app.list_state.select(Some(app.files.len() - 1));
                     }
+                }
+                KeyCode::PageDown => {
+                    app.page_down();
+                }
+                KeyCode::PageUp => {
+                    app.page_up();
+                }
+                KeyCode::Char('e') => {
+                    // Expand all folders (Status mode)
+                    app.expand_all_folders();
+                }
+                KeyCode::Char('E') => {
+                    // Collapse all folders (Status mode)
+                    app.collapse_all_folders();
                 }
                 _ => {}
             }
@@ -1627,7 +2033,59 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
 
                 ListItem::new(line)
             } else {
-                // Status mode - show full info
+                // Status mode - show tree view
+                if file.is_folder_node {
+                    // Folder node
+                    let expanded = app.expanded_folders.contains(&file.path);
+                    let expand_icon = if expanded { "▼" } else { "▶" };
+
+                    // Status indicator for folder
+                    let (folder_status, status_color) = if file.modified_count > 0 {
+                        ("M", Color::Yellow)
+                    } else if file.new_count > 0 {
+                        ("+", Color::Cyan)
+                    } else {
+                        (" ", Color::Green)
+                    };
+
+                    let count_str = format!("({} files", file.child_count);
+                    let mod_str = if file.modified_count > 0 {
+                        format!(", {} modified", file.modified_count)
+                    } else {
+                        String::new()
+                    };
+                    let new_str = if file.new_count > 0 {
+                        format!(", {} new", file.new_count)
+                    } else {
+                        String::new()
+                    };
+                    let stats = format!("{}{}{})", count_str, mod_str, new_str);
+
+                    let line = Line::from(vec![
+                        Span::raw(format!("{} ", selected_marker)),
+                        Span::styled(
+                            format!("{} ", folder_status),
+                            Style::default().fg(status_color),
+                        ),
+                        Span::styled(
+                            format!("{} ", expand_icon),
+                            Style::default().fg(Color::Blue),
+                        ),
+                        Span::styled(
+                            file.display_path.clone(),
+                            Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  {}", stats),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]);
+
+                    return ListItem::new(line);
+                }
+
+                // Regular file (nested under folder)
+                let indent = "    ".repeat(file.depth);
                 let status_symbol = file.status.symbol();
                 let mode_indicator = match file.backup_mode {
                     Some(BackupMode::Archive) => "[A]",
@@ -1646,7 +2104,7 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
                         format!("{} ", status_symbol),
                         Style::default().fg(file.status.color()),
                     ),
-                    Span::raw(format!("{} ", mode_indicator)),
+                    Span::raw(format!("{}{} ", indent, mode_indicator)),
                     Span::styled(
                         file.display_path.clone(),
                         Style::default().fg(if file.is_tracked {
@@ -2000,6 +2458,11 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::styled("q", key_style),
             Span::raw("           Quit (saves changes)"),
         ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("PgDn/PgUp", key_style),
+            Span::raw("   Page down/up"),
+        ]),
         Line::from(""),
         Line::from(Span::styled("  TRACKED FILES TAB", header_style)),
         Line::from(Span::styled("  =================", dim_style)),
@@ -2022,6 +2485,21 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("  "),
             Span::styled("r", key_style),
             Span::raw("           Refresh list"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter", key_style),
+            Span::raw("       Expand/collapse folder"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("e", key_style),
+            Span::raw("           Expand all folders"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("E", key_style),
+            Span::raw("           Collapse all folders"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  ADD FILES TAB", header_style)),
@@ -2217,14 +2695,19 @@ fn render_backup_input(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
-    let status = if let Some(ref msg) = app.message {
-        msg.clone()
+    let (status, style) = if app.busy {
+        // Show spinner and busy message
+        let spinner = SPINNER_FRAMES[app.spinner_frame];
+        let msg = format!(" {} {}", spinner, app.busy_message);
+        (msg, Style::default().fg(Color::Yellow))
+    } else if let Some(ref msg) = app.message {
+        (msg.clone(), Style::default().fg(Color::Cyan))
     } else {
         let selected_count = app.selected.len();
 
         // Get total count based on current mode/view
         let (total, mode_hint) = match app.mode {
-            TuiMode::Status => (app.files.len(), "b: backup | B: backup+msg | d: remove"),
+            TuiMode::Status => (app.files.len(), "Enter: expand folder | b: backup | d: remove | e/E: expand/collapse all"),
             TuiMode::Browse => {
                 match app.restore_view {
                     RestoreView::Commits => (app.commits.len(), "Enter: select backup"),
@@ -2234,7 +2717,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
             TuiMode::Add => (app.files.len(), "Enter: add/open | A: folder | R: recursive | d: untrack"),
         };
 
-        if selected_count > 0 {
+        let msg = if selected_count > 0 {
             format!(
                 " {} selected | {} total | {} | Tab: switch tab | ?: help | q: quit",
                 selected_count, total, mode_hint
@@ -2244,13 +2727,14 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
                 " {} items | {} | Tab: switch tab | ?: help | q: quit",
                 total, mode_hint
             )
-        }
+        };
+        (msg, Style::default().fg(Color::Cyan))
     };
 
     let version = env!("CARGO_PKG_VERSION");
     let status_bar = Paragraph::new(status)
         .block(Block::default().borders(Borders::ALL).title(format!(" v{} ", version)))
-        .style(Style::default().fg(Color::Cyan));
+        .style(style);
 
     f.render_widget(status_bar, area);
 }
