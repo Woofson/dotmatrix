@@ -372,9 +372,16 @@ impl GuiApp {
                         Color32::TRANSPARENT
                     };
 
-                    // Allocate space for the row and get a response for click detection
-                    let (row_rect, row_response) = ui.allocate_exact_size(
+                    // Allocate space for the row
+                    let (row_rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::hover(),
+                    );
+
+                    // Interact with the full row rect (must use unique ID)
+                    let row_response = ui.interact(
+                        row_rect,
+                        egui::Id::new(("status_row", *i)),
                         egui::Sense::click(),
                     );
 
@@ -384,17 +391,15 @@ impl GuiApp {
                         ui.painter().rect_filled(row_rect, 0.0, color);
                     }
 
-                    // Draw the row content
-                    let mut content_ui = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(row_rect)
-                            .layout(egui::Layout::left_to_right(egui::Align::Center))
-                    );
-                    content_ui.set_clip_rect(row_rect);
+                    // Draw the row content using painter (non-interactive)
+                    let mut x = row_rect.left() + 4.0;
+                    let y = row_rect.center().y;
+                    let font = egui::FontId::monospace(13.0);
 
                     // Selection marker
                     let marker = if *is_multi_selected { "*" } else { " " };
-                    content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                    ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, marker, font.clone(), Colors::CYAN);
+                    x += 12.0;
 
                     if file.is_folder_node {
                         // Folder row
@@ -408,14 +413,13 @@ impl GuiApp {
                         } else {
                             (" ", Colors::GREEN)
                         };
-                        content_ui.label(RichText::new(status).color(color).monospace());
-                        content_ui.label(RichText::new(expand_icon).color(Colors::BLUE).monospace());
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, status, font.clone(), color);
+                        x += 14.0;
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, expand_icon, font.clone(), Colors::BLUE);
+                        x += 16.0;
 
-                        let folder_text = RichText::new(&file.display_path)
-                            .color(Colors::BLUE)
-                            .strong()
-                            .monospace();
-                        content_ui.label(folder_text);
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &file.display_path, font.clone(), Colors::BLUE);
+                        x += file.display_path.len() as f32 * 8.0 + 8.0;
 
                         // Stats
                         let stats = format!(
@@ -424,17 +428,18 @@ impl GuiApp {
                             if file.modified_count > 0 { format!(", {} modified", file.modified_count) } else { String::new() },
                             if file.new_count > 0 { format!(", {} new", file.new_count) } else { String::new() }
                         );
-                        content_ui.label(RichText::new(stats).color(Colors::DARK_GRAY).monospace());
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, stats, font.clone(), Colors::DARK_GRAY);
                     } else {
                         // File row
                         let status_color = file.status.color();
                         let status_symbol = file.status.symbol();
 
-                        content_ui.label(RichText::new(status_symbol).color(egui_color(status_color)).monospace());
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, status_symbol, font.clone(), egui_color(status_color));
+                        x += 14.0;
 
                         // Indentation
-                        let indent = "    ".repeat(file.depth);
-                        content_ui.label(RichText::new(&indent).monospace());
+                        let indent_width = file.depth as f32 * 32.0;
+                        x += indent_width;
 
                         // Mode indicator
                         let mode_str = match file.backup_mode {
@@ -442,17 +447,17 @@ impl GuiApp {
                             Some(BackupMode::Incremental) => "[I]",
                             None => "   ",
                         };
-                        content_ui.label(RichText::new(mode_str).color(Colors::BLUE).monospace());
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, mode_str, font.clone(), Colors::BLUE);
+                        x += 28.0;
 
                         let file_color = if file.is_tracked { Colors::WHITE } else { Colors::DARK_GRAY };
-                        let file_text = RichText::new(&file.display_path)
-                            .color(file_color)
-                            .monospace();
-                        content_ui.label(file_text);
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &file.display_path, font.clone(), file_color);
+                        x += file.display_path.len() as f32 * 8.0 + 8.0;
 
                         // Size
                         if let Some(size) = file.size {
-                            content_ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                            let size_str = format!("  {}", format_size(size));
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, size_str, font.clone(), Colors::DARK_GRAY);
                         }
                     }
 
@@ -578,9 +583,16 @@ impl GuiApp {
                         Color32::TRANSPARENT
                     };
 
-                    // Allocate space for the row and get a response for click detection
-                    let (row_rect, row_response) = ui.allocate_exact_size(
+                    // Allocate space for the row
+                    let (row_rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::hover(),
+                    );
+
+                    // Interact with the full row rect (must use unique ID)
+                    let row_response = ui.interact(
+                        row_rect,
+                        egui::Id::new(("add_row", *i)),
                         egui::Sense::click(),
                     );
 
@@ -590,19 +602,18 @@ impl GuiApp {
                         ui.painter().rect_filled(row_rect, 0.0, color);
                     }
 
-                    // Draw the row content
-                    let mut content_ui = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(row_rect)
-                            .layout(egui::Layout::left_to_right(egui::Align::Center))
-                    );
-                    content_ui.set_clip_rect(row_rect);
+                    // Draw the row content using painter (non-interactive)
+                    let mut x = row_rect.left() + 4.0;
+                    let y = row_rect.center().y;
+                    let font = egui::FontId::monospace(13.0);
 
                     let marker = if *is_multi_selected { "*" } else { " " };
-                    content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                    ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, marker, font.clone(), Colors::CYAN);
+                    x += 12.0;
 
                     let icon = if file.is_dir { "/" } else { " " };
-                    content_ui.label(RichText::new(icon).color(Colors::BLUE).monospace());
+                    ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, icon, font.clone(), Colors::BLUE);
+                    x += 12.0;
 
                     let color = if file.is_dir {
                         Colors::BLUE
@@ -612,20 +623,17 @@ impl GuiApp {
                         Colors::WHITE
                     };
 
-                    let text = RichText::new(&file.display_path)
-                        .color(color)
-                        .monospace();
-
-                    let text = if file.is_dir { text.strong() } else { text };
-
-                    content_ui.label(text);
+                    ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &file.display_path, font.clone(), color);
+                    x += file.display_path.len() as f32 * 8.0 + 4.0;
 
                     if file.is_tracked {
-                        content_ui.label(RichText::new(" [tracked]").color(Colors::GREEN).monospace());
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, " [tracked]", font.clone(), Colors::GREEN);
+                        x += 80.0;
                     }
 
                     if let Some(size) = file.size {
-                        content_ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                        let size_str = format!("  {}", format_size(size));
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, size_str, font.clone(), Colors::DARK_GRAY);
                     }
 
                     // Handle clicks on this row
@@ -735,9 +743,16 @@ impl GuiApp {
                                 Color32::TRANSPARENT
                             };
 
-                            // Allocate space for the row and get a response for click detection
-                            let (row_rect, row_response) = ui.allocate_exact_size(
+                            // Allocate space for the row
+                            let (row_rect, _) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 20.0),
+                                egui::Sense::hover(),
+                            );
+
+                            // Interact with the full row rect (must use unique ID)
+                            let row_response = ui.interact(
+                                row_rect,
+                                egui::Id::new(("restore_commit_row", *i)),
                                 egui::Sense::click(),
                             );
 
@@ -747,27 +762,27 @@ impl GuiApp {
                                 ui.painter().rect_filled(row_rect, 0.0, color);
                             }
 
-                            // Draw the row content
-                            let mut content_ui = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(row_rect)
-                                    .layout(egui::Layout::left_to_right(egui::Align::Center))
-                            );
-                            content_ui.set_clip_rect(row_rect);
+                            // Draw the row content using painter (non-interactive)
+                            let mut x = row_rect.left() + 4.0;
+                            let y = row_rect.center().y;
+                            let font = egui::FontId::monospace(13.0);
 
                             let marker = if *is_multi_selected { "*" } else { " " };
-                            content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, marker, font.clone(), Colors::CYAN);
+                            x += 12.0;
 
-                            content_ui.label(RichText::new(&commit.short_hash).color(Colors::YELLOW).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &commit.short_hash, font.clone(), Colors::YELLOW);
+                            x += 70.0;
 
                             let date_short = if commit.date.len() > 19 {
                                 &commit.date[..19]
                             } else {
                                 &commit.date
                             };
-                            content_ui.label(RichText::new(date_short).color(Colors::CYAN).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, date_short, font.clone(), Colors::CYAN);
+                            x += 160.0;
 
-                            content_ui.label(RichText::new(&commit.message).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &commit.message, font.clone(), Colors::WHITE);
 
                             // Handle clicks on this row
                             if row_response.clicked() {
@@ -848,9 +863,16 @@ impl GuiApp {
                                 Color32::TRANSPARENT
                             };
 
-                            // Allocate space for the row and get a response for click detection
-                            let (row_rect, row_response) = ui.allocate_exact_size(
+                            // Allocate space for the row
+                            let (row_rect, _) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 20.0),
+                                egui::Sense::hover(),
+                            );
+
+                            // Interact with the full row rect (must use unique ID)
+                            let row_response = ui.interact(
+                                row_rect,
+                                egui::Id::new(("restore_file_row", *i)),
                                 egui::Sense::click(),
                             );
 
@@ -860,16 +882,14 @@ impl GuiApp {
                                 ui.painter().rect_filled(row_rect, 0.0, color);
                             }
 
-                            // Draw the row content
-                            let mut content_ui = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(row_rect)
-                                    .layout(egui::Layout::left_to_right(egui::Align::Center))
-                            );
-                            content_ui.set_clip_rect(row_rect);
+                            // Draw the row content using painter (non-interactive)
+                            let mut x = row_rect.left() + 4.0;
+                            let y = row_rect.center().y;
+                            let font = egui::FontId::monospace(13.0);
 
                             let marker = if *is_multi_selected { "*" } else { " " };
-                            content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, marker, font.clone(), Colors::CYAN);
+                            x += 12.0;
 
                             let (status, color) = if !file.exists_locally {
                                 ("NEW", Colors::CYAN)
@@ -878,12 +898,15 @@ impl GuiApp {
                             } else {
                                 ("OK ", Colors::GREEN)
                             };
-                            content_ui.label(RichText::new(status).color(color).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, status, font.clone(), color);
+                            x += 35.0;
 
-                            content_ui.label(RichText::new(format_size(file.size)).color(Colors::DARK_GRAY).monospace());
+                            let size_str = format_size(file.size);
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &size_str, font.clone(), Colors::DARK_GRAY);
+                            x += 70.0;
 
                             let file_color = if file.local_differs { Colors::WHITE } else { Colors::DARK_GRAY };
-                            content_ui.label(RichText::new(&file.display_path).color(file_color).monospace());
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &file.display_path, font.clone(), file_color);
 
                             // Handle clicks on this row
                             if row_response.clicked() {
