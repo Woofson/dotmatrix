@@ -1,9 +1,10 @@
 use chrono::{Local, TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use dotmatrix::config::{BackupMode, Config, TrackedPattern};
+use dotmatrix::config::{BackupMode, Config, PreferredInterface, TrackedPattern};
 use dotmatrix::index::{FileEntry, Index};
 use dotmatrix::scanner::{self, RecursiveScanOptions, Verbosity};
 use dotmatrix::tui;
+use dotmatrix::gui;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
@@ -104,9 +105,17 @@ enum Commands {
     Remove { patterns: Vec<String> },
     /// Launch interactive TUI
     Tui,
+    /// Launch graphical user interface
+    Gui,
 }
 
 fn main() -> anyhow::Result<()> {
+    // Check if running with no subcommand (just "dotmatrix")
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 1 {
+        return run_default_interface();
+    }
+
     let cli = Cli::parse();
     let verbosity = get_verbosity(cli.verbose);
 
@@ -128,6 +137,7 @@ fn main() -> anyhow::Result<()> {
         Commands::List => cmd_list()?,
         Commands::Remove { patterns } => cmd_remove(patterns)?,
         Commands::Tui => cmd_tui()?,
+        Commands::Gui => cmd_gui()?,
     }
 
     Ok(())
@@ -1851,4 +1861,55 @@ fn cmd_tui() -> anyhow::Result<()> {
     };
 
     tui::run(config, index, config_path, index_path, data_dir)
+}
+
+fn cmd_gui() -> anyhow::Result<()> {
+    let config_path = dotmatrix::get_config_path()?;
+    let index_path = dotmatrix::get_index_path()?;
+    let data_dir = dotmatrix::get_data_dir()?;
+
+    if !config_path.exists() {
+        println!("No config file found. Run 'dotmatrix init' first.");
+        return Ok(());
+    }
+
+    let config = Config::load(&config_path)?;
+    let index = if index_path.exists() {
+        Index::load(&index_path)?
+    } else {
+        Index::new()
+    };
+
+    gui::run(config, index, config_path, index_path, data_dir)
+}
+
+/// Run the default interface based on platform and config
+fn run_default_interface() -> anyhow::Result<()> {
+    // Try to load config to check preferred_interface setting
+    let config_path = dotmatrix::get_config_path()?;
+    let preferred = if config_path.exists() {
+        Config::load(&config_path)
+            .map(|c| c.preferred_interface)
+            .unwrap_or(PreferredInterface::Auto)
+    } else {
+        PreferredInterface::Auto
+    };
+
+    let use_gui = match preferred {
+        PreferredInterface::Gui => true,
+        PreferredInterface::Tui => false,
+        PreferredInterface::Auto => {
+            // Platform default: GUI on Windows, TUI elsewhere
+            #[cfg(target_os = "windows")]
+            { true }
+            #[cfg(not(target_os = "windows"))]
+            { false }
+        }
+    };
+
+    if use_gui {
+        cmd_gui()
+    } else {
+        cmd_tui()
+    }
 }

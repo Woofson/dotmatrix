@@ -1,0 +1,1191 @@
+//! GUI frontend using egui/eframe.
+//!
+//! This module provides a cross-platform graphical interface that mirrors
+//! the TUI functionality. It uses the shared `App` state from the `app` module.
+
+use crate::app::{
+    App, AddSubMode, RestoreView, TuiMode,
+    format_size, SPINNER_FRAMES,
+};
+use crate::config::{BackupMode, Config, TrackedPattern};
+use crate::index::Index;
+use anyhow::Result;
+use eframe::egui::{self, Color32, Key, RichText, ScrollArea, TextEdit};
+use std::path::PathBuf;
+
+/// Color scheme matching TUI theme
+struct Colors;
+
+impl Colors {
+    const GREEN: Color32 = Color32::from_rgb(0, 200, 0);
+    const YELLOW: Color32 = Color32::from_rgb(230, 200, 0);
+    const CYAN: Color32 = Color32::from_rgb(0, 200, 200);
+    const RED: Color32 = Color32::from_rgb(200, 50, 50);
+    const BLUE: Color32 = Color32::from_rgb(100, 150, 255);
+    const DARK_GRAY: Color32 = Color32::from_rgb(128, 128, 128);
+    const WHITE: Color32 = Color32::from_rgb(220, 220, 220);
+    const MAGENTA: Color32 = Color32::from_rgb(200, 100, 200);
+    const SELECTION_BG: Color32 = Color32::from_rgb(60, 60, 80);
+}
+
+/// GUI wrapper around the shared App state
+pub struct GuiApp {
+    app: App,
+    // GUI-specific state
+    text_input_focus: bool,
+}
+
+impl GuiApp {
+    pub fn new(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf, data_dir: PathBuf) -> Self {
+        Self {
+            app: App::new(config, index, config_path, index_path, data_dir),
+            text_input_focus: false,
+        }
+    }
+
+    fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        // Don't process keyboard shortcuts while typing in text input
+        if self.text_input_focus {
+            return;
+        }
+
+        ctx.input(|i| {
+            // Quit
+            if i.key_pressed(Key::Q) && !i.modifiers.ctrl {
+                if !self.app.busy {
+                    self.app.should_quit = true;
+                }
+            }
+
+            // Escape handling
+            if i.key_pressed(Key::Escape) {
+                if self.app.show_help {
+                    self.app.show_help = false;
+                } else if self.app.viewer_visible {
+                    self.app.close_viewer();
+                } else if self.app.add_sub_mode == AddSubMode::RecursivePreview {
+                    self.app.cancel_recursive_preview();
+                } else if self.app.add_mode {
+                    self.app.add_input.clear();
+                    self.app.add_mode = false;
+                } else if self.app.backup_message_mode {
+                    self.app.backup_message_input.clear();
+                    self.app.backup_message_mode = false;
+                } else if self.app.mode == TuiMode::Add {
+                    let home = dirs::home_dir().unwrap_or_default();
+                    if self.app.browse_dir == home {
+                        self.app.should_quit = true;
+                    } else {
+                        self.app.parent_directory();
+                    }
+                } else {
+                    self.app.should_quit = true;
+                }
+            }
+
+            // Help toggle
+            if i.key_pressed(Key::F1) {
+                self.app.show_help = !self.app.show_help;
+            }
+
+            // Navigation (if not in overlay mode)
+            if !self.app.show_help && !self.app.viewer_visible && !self.app.add_mode && !self.app.backup_message_mode {
+                // Tab switching
+                if i.key_pressed(Key::Tab) && !i.modifiers.shift {
+                    self.app.next_mode();
+                }
+                if i.key_pressed(Key::Tab) && i.modifiers.shift {
+                    self.app.prev_mode();
+                }
+
+                // Recursive preview mode navigation
+                if self.app.add_sub_mode == AddSubMode::RecursivePreview {
+                    if i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::J) {
+                        self.app.preview_next();
+                    }
+                    if i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::K) {
+                        self.app.preview_previous();
+                    }
+                    if i.key_pressed(Key::Space) {
+                        self.app.toggle_preview_file();
+                        self.app.preview_next();
+                    }
+                    if i.key_pressed(Key::A) && i.modifiers.ctrl {
+                        self.app.toggle_all_preview_files();
+                    }
+                    if i.key_pressed(Key::Enter) {
+                        self.app.confirm_recursive_add();
+                    }
+                    if i.key_pressed(Key::PageDown) {
+                        self.app.preview_page_down();
+                    }
+                    if i.key_pressed(Key::PageUp) {
+                        self.app.preview_page_up();
+                    }
+                    return;
+                }
+
+                // List navigation
+                if i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::J) {
+                    self.app.next();
+                }
+                if i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::K) {
+                    self.app.previous();
+                }
+                if i.key_pressed(Key::PageDown) {
+                    self.app.page_down();
+                }
+                if i.key_pressed(Key::PageUp) {
+                    self.app.page_up();
+                }
+                if i.key_pressed(Key::Home) || (i.key_pressed(Key::G) && !i.modifiers.shift) {
+                    self.app.list_state.select(Some(0));
+                }
+                if i.key_pressed(Key::End) || (i.key_pressed(Key::G) && i.modifiers.shift) {
+                    if !self.app.files.is_empty() {
+                        self.app.list_state.select(Some(self.app.files.len() - 1));
+                    }
+                }
+
+                // Selection
+                if i.key_pressed(Key::Space) {
+                    self.app.toggle_select();
+                    self.app.next();
+                }
+                if i.key_pressed(Key::A) && i.modifiers.ctrl {
+                    self.app.select_all();
+                }
+
+                // Mode-specific actions
+                match self.app.mode {
+                    TuiMode::Status => {
+                        if i.key_pressed(Key::Enter) || i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::L) {
+                            if let Some(idx) = self.app.list_state.selected() {
+                                if idx < self.app.files.len() && self.app.files[idx].is_folder_node {
+                                    self.app.expand_folder();
+                                }
+                            }
+                        }
+                        if i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::H) || i.key_pressed(Key::Backspace) {
+                            self.app.collapse_folder();
+                        }
+                        if i.key_pressed(Key::B) && !i.modifiers.shift {
+                            self.app.perform_backup(None);
+                        }
+                        if i.key_pressed(Key::B) && i.modifiers.shift {
+                            self.app.backup_message_mode = true;
+                        }
+                        if i.key_pressed(Key::D) || i.key_pressed(Key::Delete) {
+                            self.app.toggle_tracking();
+                        }
+                        if i.key_pressed(Key::E) && !i.modifiers.shift {
+                            self.app.expand_all_folders();
+                        }
+                        if i.key_pressed(Key::E) && i.modifiers.shift {
+                            self.app.collapse_all_folders();
+                        }
+                    }
+                    TuiMode::Add => {
+                        if i.key_pressed(Key::Enter) || i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::L) {
+                            if let Some(idx) = self.app.list_state.selected() {
+                                if idx < self.app.files.len() && self.app.files[idx].is_dir {
+                                    self.app.enter_directory();
+                                } else {
+                                    self.app.toggle_tracking();
+                                }
+                            }
+                        }
+                        if i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::H) || i.key_pressed(Key::Backspace) {
+                            self.app.parent_directory();
+                        }
+                        if i.key_pressed(Key::A) && i.modifiers.shift {
+                            self.app.add_folder_pattern();
+                        }
+                        if i.key_pressed(Key::A) && !i.modifiers.ctrl && !i.modifiers.shift {
+                            self.app.add_mode = true;
+                        }
+                        if i.key_pressed(Key::R) && i.modifiers.shift {
+                            self.app.start_recursive_preview();
+                        }
+                        if i.key_pressed(Key::D) || i.key_pressed(Key::Delete) {
+                            self.app.remove_from_tracking_in_browser();
+                        }
+                    }
+                    TuiMode::Browse => {
+                        if i.key_pressed(Key::Enter) || i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::L) {
+                            match self.app.restore_view {
+                                RestoreView::Commits => self.app.select_commit(),
+                                RestoreView::Files => self.app.perform_restore(),
+                            }
+                        }
+                        if i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::H) || i.key_pressed(Key::Backspace) {
+                            if self.app.restore_view == RestoreView::Files {
+                                self.app.back_to_commits();
+                            }
+                        }
+                    }
+                }
+
+                // View file
+                if i.key_pressed(Key::V) {
+                    self.app.open_viewer();
+                }
+
+                // Refresh
+                if i.key_pressed(Key::R) && !i.modifiers.shift {
+                    self.app.reload_index();
+                    self.app.refresh_files();
+                    self.app.message = Some("Refreshed".to_string());
+                }
+            }
+
+            // Viewer mode navigation
+            if self.app.viewer_visible {
+                if i.key_pressed(Key::ArrowDown) || i.key_pressed(Key::J) {
+                    let max_scroll = self.app.viewer_content.len().saturating_sub(1);
+                    if self.app.viewer_scroll < max_scroll {
+                        self.app.viewer_scroll += 1;
+                    }
+                }
+                if i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::K) {
+                    self.app.viewer_scroll = self.app.viewer_scroll.saturating_sub(1);
+                }
+                if i.key_pressed(Key::PageDown) {
+                    let max_scroll = self.app.viewer_content.len().saturating_sub(1);
+                    self.app.viewer_scroll = (self.app.viewer_scroll + 20).min(max_scroll);
+                }
+                if i.key_pressed(Key::PageUp) {
+                    self.app.viewer_scroll = self.app.viewer_scroll.saturating_sub(20);
+                }
+                if i.key_pressed(Key::Home) || (i.key_pressed(Key::G) && !i.modifiers.shift) {
+                    self.app.viewer_scroll = 0;
+                }
+                if i.key_pressed(Key::End) || (i.key_pressed(Key::G) && i.modifiers.shift) {
+                    self.app.viewer_scroll = self.app.viewer_content.len().saturating_sub(1);
+                }
+            }
+        });
+    }
+
+    fn render_tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            for (i, title) in TuiMode::titles().iter().enumerate() {
+                let is_selected = self.app.mode.index() == i;
+                let text = if is_selected {
+                    RichText::new(*title).strong().color(Colors::YELLOW)
+                } else {
+                    RichText::new(*title).color(Colors::WHITE)
+                };
+
+                if ui.selectable_label(is_selected, text).clicked() {
+                    self.app.mode = TuiMode::from_index(i);
+                    self.app.selected.clear();
+                    self.app.refresh_files();
+                }
+                ui.add_space(20.0);
+            }
+        });
+        ui.separator();
+    }
+
+    fn render_status_tab(&mut self, ui: &mut egui::Ui) {
+        // Title
+        ui.label(RichText::new("Your Tracked Files - Shows backup status and changes").color(Colors::DARK_GRAY));
+        ui.add_space(5.0);
+
+        // Collect items to display (avoid borrowing issues)
+        let items: Vec<_> = self.app.files.iter().enumerate().map(|(i, file)| {
+            let is_selected = self.app.list_state.selected() == Some(i);
+            let is_multi_selected = self.app.selected.contains(&i);
+            let expanded = self.app.expanded_folders.contains(&file.path);
+            (i, file.clone(), is_selected, is_multi_selected, expanded)
+        }).collect();
+
+        let mut clicked_folder: Option<usize> = None;
+        let mut clicked_item: Option<usize> = None;
+
+        ScrollArea::vertical().show(ui, |ui| {
+            for (i, file, is_selected, is_multi_selected, expanded) in &items {
+                let bg_color = if *is_selected {
+                    Colors::SELECTION_BG
+                } else {
+                    Color32::TRANSPARENT
+                };
+
+                egui::Frame::none()
+                    .fill(bg_color)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // Selection marker
+                            let marker = if *is_multi_selected { "*" } else { " " };
+                            ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                            if file.is_folder_node {
+                                // Folder row
+                                let expand_icon = if *expanded { "▼" } else { "▶" };
+
+                                // Status indicator
+                                let (status, color) = if file.modified_count > 0 {
+                                    ("M", Colors::YELLOW)
+                                } else if file.new_count > 0 {
+                                    ("+", Colors::CYAN)
+                                } else {
+                                    (" ", Colors::GREEN)
+                                };
+                                ui.label(RichText::new(status).color(color).monospace());
+
+                                ui.label(RichText::new(expand_icon).color(Colors::BLUE).monospace());
+
+                                let folder_text = RichText::new(&file.display_path)
+                                    .color(Colors::BLUE)
+                                    .strong()
+                                    .monospace();
+
+                                if ui.selectable_label(false, folder_text).clicked() {
+                                    clicked_folder = Some(*i);
+                                }
+
+                                // Stats
+                                let stats = format!(
+                                    "({} files{}{})",
+                                    file.child_count,
+                                    if file.modified_count > 0 { format!(", {} modified", file.modified_count) } else { String::new() },
+                                    if file.new_count > 0 { format!(", {} new", file.new_count) } else { String::new() }
+                                );
+                                ui.label(RichText::new(stats).color(Colors::DARK_GRAY).monospace());
+                            } else {
+                                // File row
+                                let status_color = file.status.color();
+                                let status_symbol = file.status.symbol();
+
+                                ui.label(RichText::new(status_symbol).color(egui_color(status_color)).monospace());
+
+                                // Indentation
+                                let indent = "    ".repeat(file.depth);
+                                ui.label(RichText::new(&indent).monospace());
+
+                                // Mode indicator
+                                let mode_str = match file.backup_mode {
+                                    Some(BackupMode::Archive) => "[A]",
+                                    Some(BackupMode::Incremental) => "[I]",
+                                    None => "   ",
+                                };
+                                ui.label(RichText::new(mode_str).color(Colors::BLUE).monospace());
+
+                                let file_color = if file.is_tracked { Colors::WHITE } else { Colors::DARK_GRAY };
+                                let file_text = RichText::new(&file.display_path)
+                                    .color(file_color)
+                                    .monospace();
+
+                                if ui.selectable_label(false, file_text).clicked() {
+                                    clicked_item = Some(*i);
+                                }
+
+                                // Size
+                                if let Some(size) = file.size {
+                                    ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                                }
+                            }
+                        });
+                    });
+            }
+        });
+
+        // Handle clicks after iteration
+        if let Some(i) = clicked_folder {
+            self.app.list_state.select(Some(i));
+            self.app.toggle_folder();
+        } else if let Some(i) = clicked_item {
+            self.app.list_state.select(Some(i));
+        }
+
+        // Context menu (right-click)
+        if let Some(i) = self.app.list_state.selected() {
+            if i < self.app.files.len() {
+                let file = self.app.files[i].clone();
+                let id = egui::Id::new("status_context").with(i);
+
+                // Check for right-click anywhere in the scroll area
+                ui.interact(ui.max_rect(), id, egui::Sense::click())
+                    .context_menu(|ui| {
+                        if file.is_folder_node {
+                            if self.app.expanded_folders.contains(&file.path) {
+                                if ui.button("Collapse Folder").clicked() {
+                                    self.app.collapse_folder();
+                                    ui.close_menu();
+                                }
+                            } else {
+                                if ui.button("Expand Folder").clicked() {
+                                    self.app.expand_folder();
+                                    ui.close_menu();
+                                }
+                            }
+                        } else {
+                            if ui.button("View File").clicked() {
+                                self.app.open_viewer();
+                                ui.close_menu();
+                            }
+                            if ui.button("Backup Now").clicked() {
+                                self.app.perform_backup(None);
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Remove from Tracking").clicked() {
+                                self.app.toggle_tracking();
+                                ui.close_menu();
+                            }
+                        }
+                    });
+            }
+        }
+    }
+
+    fn render_add_tab(&mut self, ui: &mut egui::Ui) {
+        // Path display
+        let path_display = if let Some(home) = dirs::home_dir() {
+            if let Ok(rel) = self.app.browse_dir.strip_prefix(&home) {
+                format!("~/{}", rel.display())
+            } else {
+                self.app.browse_dir.display().to_string()
+            }
+        } else {
+            self.app.browse_dir.display().to_string()
+        };
+        ui.label(RichText::new(format!("{} - Select a file and press Enter to track it", path_display)).color(Colors::DARK_GRAY));
+        ui.add_space(5.0);
+
+        // Collect items to avoid borrowing issues
+        let items: Vec<_> = self.app.files.iter().enumerate().map(|(i, file)| {
+            let is_selected = self.app.list_state.selected() == Some(i);
+            let is_multi_selected = self.app.selected.contains(&i);
+            (i, file.clone(), is_selected, is_multi_selected)
+        }).collect();
+
+        let mut clicked_item: Option<usize> = None;
+
+        ScrollArea::vertical().show(ui, |ui| {
+            for (i, file, is_selected, is_multi_selected) in &items {
+                let bg_color = if *is_selected {
+                    Colors::SELECTION_BG
+                } else {
+                    Color32::TRANSPARENT
+                };
+
+                egui::Frame::none()
+                    .fill(bg_color)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let marker = if *is_multi_selected { "*" } else { " " };
+                            ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                            let icon = if file.is_dir { "/" } else { " " };
+                            ui.label(RichText::new(icon).color(Colors::BLUE).monospace());
+
+                            let color = if file.is_dir {
+                                Colors::BLUE
+                            } else if file.is_tracked {
+                                Colors::GREEN
+                            } else {
+                                Colors::WHITE
+                            };
+
+                            let text = RichText::new(&file.display_path)
+                                .color(color)
+                                .monospace();
+
+                            let text = if file.is_dir { text.strong() } else { text };
+
+                            if ui.selectable_label(false, text).clicked() {
+                                clicked_item = Some(*i);
+                            }
+
+                            if file.is_tracked {
+                                ui.label(RichText::new(" [tracked]").color(Colors::GREEN).monospace());
+                            }
+
+                            if let Some(size) = file.size {
+                                ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                            }
+                        });
+                    });
+            }
+        });
+
+        if let Some(i) = clicked_item {
+            self.app.list_state.select(Some(i));
+        }
+
+        // Context menu (right-click) for Add tab
+        if let Some(i) = self.app.list_state.selected() {
+            if i < self.app.files.len() {
+                let file = self.app.files[i].clone();
+                let id = egui::Id::new("add_context").with(i);
+
+                ui.interact(ui.max_rect(), id, egui::Sense::click())
+                    .context_menu(|ui| {
+                        if file.is_dir {
+                            if ui.button("Open Folder").clicked() {
+                                self.app.enter_directory();
+                                ui.close_menu();
+                            }
+                            if ui.button("Add Folder Pattern (/**)").clicked() {
+                                self.app.add_folder_pattern();
+                                ui.close_menu();
+                            }
+                            if ui.button("Recursive Add Preview").clicked() {
+                                self.app.start_recursive_preview();
+                                ui.close_menu();
+                            }
+                        } else {
+                            if file.is_tracked {
+                                if ui.button("Remove from Tracking").clicked() {
+                                    self.app.remove_from_tracking_in_browser();
+                                    ui.close_menu();
+                                }
+                            } else {
+                                if ui.button("Add to Tracking").clicked() {
+                                    self.app.toggle_tracking();
+                                    ui.close_menu();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("View File").clicked() {
+                                self.app.open_viewer();
+                                ui.close_menu();
+                            }
+                        }
+                    });
+            }
+        }
+    }
+
+    fn render_restore_tab(&mut self, ui: &mut egui::Ui) {
+        match self.app.restore_view {
+            RestoreView::Commits => {
+                ui.label(RichText::new("Backup History - Select a backup to restore from (Enter to select)").color(Colors::DARK_GRAY));
+                ui.add_space(5.0);
+
+                let items: Vec<_> = self.app.commits.iter().enumerate().map(|(i, commit)| {
+                    let is_selected = self.app.restore_list_state.selected() == Some(i);
+                    let is_multi_selected = self.app.selected.contains(&i);
+                    (i, commit.clone(), is_selected, is_multi_selected)
+                }).collect();
+
+                let mut clicked_item: Option<usize> = None;
+
+                ScrollArea::vertical().show(ui, |ui| {
+                    for (i, commit, is_selected, is_multi_selected) in &items {
+                        let bg_color = if *is_selected {
+                            Colors::SELECTION_BG
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+
+                        egui::Frame::none()
+                            .fill(bg_color)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let marker = if *is_multi_selected { "*" } else { " " };
+                                    ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                                    ui.label(RichText::new(&commit.short_hash).color(Colors::YELLOW).monospace());
+
+                                    let date_short = if commit.date.len() > 19 {
+                                        &commit.date[..19]
+                                    } else {
+                                        &commit.date
+                                    };
+                                    ui.label(RichText::new(date_short).color(Colors::CYAN).monospace());
+
+                                    if ui.selectable_label(false, RichText::new(&commit.message).monospace()).clicked() {
+                                        clicked_item = Some(*i);
+                                    }
+                                });
+                            });
+                    }
+                });
+
+                if let Some(i) = clicked_item {
+                    self.app.restore_list_state.select(Some(i));
+                }
+
+                // Context menu for commits
+                if let Some(i) = self.app.restore_list_state.selected() {
+                    if i < self.app.commits.len() {
+                        let id = egui::Id::new("restore_commits_context").with(i);
+                        ui.interact(ui.max_rect(), id, egui::Sense::click())
+                            .context_menu(|ui| {
+                                if ui.button("Select This Backup").clicked() {
+                                    self.app.select_commit();
+                                    ui.close_menu();
+                                }
+                            });
+                    }
+                }
+            }
+            RestoreView::Files => {
+                let commit_info = self.app.selected_commit
+                    .and_then(|i| self.app.commits.get(i))
+                    .map(|c| format!("{} - {}", c.short_hash, c.message))
+                    .unwrap_or_else(|| "Unknown".to_string());
+
+                ui.label(RichText::new(format!("Files in backup: {} - Enter to restore, Backspace to go back", commit_info)).color(Colors::DARK_GRAY));
+                ui.add_space(5.0);
+
+                let items: Vec<_> = self.app.restore_files.iter().enumerate().map(|(i, file)| {
+                    let is_selected = self.app.restore_list_state.selected() == Some(i);
+                    let is_multi_selected = self.app.selected.contains(&i);
+                    (i, file.clone(), is_selected, is_multi_selected)
+                }).collect();
+
+                let mut clicked_item: Option<usize> = None;
+
+                ScrollArea::vertical().show(ui, |ui| {
+                    for (i, file, is_selected, is_multi_selected) in &items {
+                        let bg_color = if *is_selected {
+                            Colors::SELECTION_BG
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+
+                        egui::Frame::none()
+                            .fill(bg_color)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let marker = if *is_multi_selected { "*" } else { " " };
+                                    ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                                    let (status, color) = if !file.exists_locally {
+                                        ("NEW", Colors::CYAN)
+                                    } else if file.local_differs {
+                                        ("CHG", Colors::YELLOW)
+                                    } else {
+                                        ("OK ", Colors::GREEN)
+                                    };
+                                    ui.label(RichText::new(status).color(color).monospace());
+
+                                    ui.label(RichText::new(format_size(file.size)).color(Colors::DARK_GRAY).monospace());
+
+                                    let file_color = if file.local_differs { Colors::WHITE } else { Colors::DARK_GRAY };
+                                    if ui.selectable_label(false, RichText::new(&file.display_path).color(file_color).monospace()).clicked() {
+                                        clicked_item = Some(*i);
+                                    }
+                                });
+                            });
+                    }
+                });
+
+                if let Some(i) = clicked_item {
+                    self.app.restore_list_state.select(Some(i));
+                }
+
+                // Context menu for restore files
+                if let Some(i) = self.app.restore_list_state.selected() {
+                    if i < self.app.restore_files.len() {
+                        let id = egui::Id::new("restore_files_context").with(i);
+                        ui.interact(ui.max_rect(), id, egui::Sense::click())
+                            .context_menu(|ui| {
+                                if ui.button("Restore File").clicked() {
+                                    self.app.perform_restore();
+                                    ui.close_menu();
+                                }
+                                if ui.button("View File").clicked() {
+                                    self.app.open_viewer();
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("Back to Backups").clicked() {
+                                    self.app.back_to_commits();
+                                    ui.close_menu();
+                                }
+                            });
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_recursive_preview(&mut self, ui: &mut egui::Ui) {
+        let (source_display, selected_count, _total_count, gitignore_excluded, config_excluded) = {
+            let preview = match &self.app.recursive_preview {
+                Some(p) => p,
+                None => return,
+            };
+
+            let source_display = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = preview.source_dir.strip_prefix(&home) {
+                    format!("~/{}", rel.display())
+                } else {
+                    preview.source_dir.display().to_string()
+                }
+            } else {
+                preview.source_dir.display().to_string()
+            };
+
+            (source_display, preview.selected_files.len(), preview.preview_files.len(),
+             preview.gitignore_excluded, preview.config_excluded)
+        };
+
+        // Header
+        ui.horizontal(|ui| {
+            ui.label("Adding recursively: ");
+            ui.label(RichText::new(&source_display).color(Colors::YELLOW).strong());
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}", selected_count)).color(Colors::GREEN));
+            ui.label(" files selected | ");
+            ui.label(RichText::new(format!("{}", gitignore_excluded)).color(Colors::DARK_GRAY));
+            ui.label(" excluded by .gitignore | ");
+            ui.label(RichText::new(format!("{}", config_excluded)).color(Colors::DARK_GRAY));
+            ui.label(" excluded by config");
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Space").color(Colors::CYAN));
+            ui.label(": toggle | ");
+            ui.label(RichText::new("Ctrl+A").color(Colors::CYAN));
+            ui.label(": select all | ");
+            ui.label(RichText::new("Enter").color(Colors::GREEN));
+            ui.label(": add selected | ");
+            ui.label(RichText::new("Esc").color(Colors::RED));
+            ui.label(": cancel");
+        });
+
+        ui.separator();
+
+        // Collect items
+        let items: Vec<_> = if let Some(preview) = &self.app.recursive_preview {
+            preview.preview_files.iter().enumerate().map(|(i, file)| {
+                let is_selected = preview.preview_list_state.selected() == Some(i);
+                let is_checked = preview.selected_files.contains(&i);
+                (i, file.display_path.clone(), file.size, is_selected, is_checked)
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
+        ScrollArea::vertical().show(ui, |ui| {
+            for (_i, display_path, size, is_selected, is_checked) in &items {
+                let bg_color = if *is_selected {
+                    Colors::SELECTION_BG
+                } else {
+                    Color32::TRANSPARENT
+                };
+
+                egui::Frame::none()
+                    .fill(bg_color)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let marker = if *is_checked { "[x]" } else { "[ ]" };
+                            let marker_color = if *is_checked { Colors::GREEN } else { Colors::DARK_GRAY };
+                            ui.label(RichText::new(marker).color(marker_color).monospace());
+
+                            ui.label(RichText::new(format_size(*size)).color(Colors::DARK_GRAY).monospace());
+
+                            let text_color = if *is_checked { Colors::WHITE } else { Colors::DARK_GRAY };
+                            ui.label(RichText::new(display_path).color(text_color).monospace());
+                        });
+                    });
+            }
+        });
+    }
+
+    fn render_add_input_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Add files/folders to backup")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Enter a path to add to your backup:");
+                ui.add_space(10.0);
+
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.app.add_input)
+                        .desired_width(400.0)
+                        .hint_text("e.g., ~/.bashrc or ~/.config/nvim/**")
+                );
+
+                self.text_input_focus = response.has_focus();
+                response.request_focus();
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Add").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        if !self.app.add_input.is_empty() {
+                            let pattern = self.app.add_input.clone();
+                            self.app.config.tracked_files.push(TrackedPattern::simple(&pattern));
+                            self.app.config_dirty = true;
+                            self.app.message = Some(format!("Added: {} (saves on exit)", pattern));
+                            self.app.add_input.clear();
+                            self.app.refresh_files();
+                        }
+                        self.app.add_mode = false;
+                        self.text_input_focus = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.app.add_input.clear();
+                        self.app.add_mode = false;
+                        self.text_input_focus = false;
+                    }
+                });
+
+                ui.add_space(10.0);
+                ui.label(RichText::new("Hints:").color(Colors::DARK_GRAY));
+                ui.label(RichText::new("  ~/.bashrc             Add a single file").color(Colors::DARK_GRAY));
+                ui.label(RichText::new("  ~/.config/nvim/**     Add all files in folder (recursive)").color(Colors::DARK_GRAY));
+                ui.label(RichText::new("  ~/.config/nvim/*      Add files in folder (not recursive)").color(Colors::DARK_GRAY));
+            });
+    }
+
+    fn render_backup_message_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Backup commit message")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Enter a commit message for this backup:");
+                ui.add_space(10.0);
+
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.app.backup_message_input)
+                        .desired_width(400.0)
+                        .hint_text("Leave empty for auto-generated timestamp")
+                );
+
+                self.text_input_focus = response.has_focus();
+                response.request_focus();
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Backup").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        let msg = if self.app.backup_message_input.is_empty() {
+                            None
+                        } else {
+                            Some(self.app.backup_message_input.clone())
+                        };
+                        self.app.backup_message_input.clear();
+                        self.app.backup_message_mode = false;
+                        self.text_input_focus = false;
+                        self.app.perform_backup(msg);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.app.backup_message_input.clear();
+                        self.app.backup_message_mode = false;
+                        self.text_input_focus = false;
+                        self.app.message = Some("Backup cancelled".to_string());
+                    }
+                });
+            });
+    }
+
+    fn render_help_overlay(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Help & About")
+            .collapsible(false)
+            .resizable(true)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_size([600.0, 500.0])
+            .show(ctx, |ui| {
+                ScrollArea::vertical().show(ui, |ui| {
+                    // ABOUT section
+                    ui.label(RichText::new("ABOUT DOT MATRIX").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| {
+                        ui.label("Version:");
+                        ui.label(RichText::new(env!("CARGO_PKG_VERSION")).color(Colors::CYAN));
+                    });
+                    ui.label("Dotfile management and versioning tool");
+                    ui.label("Track configuration files in-place with git-based versioning.");
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.label("GitHub:");
+                        ui.hyperlink_to("github.com/Woofson/dotmatrix", "https://github.com/Woofson/dotmatrix");
+                    });
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("WHAT EACH TAB DOES").color(Colors::YELLOW).strong());
+                    ui.label("Tracked Files - View files you're backing up and their status");
+                    ui.label("Add Files - Browse your computer to add files to backup");
+                    ui.label("Restore - Recover files from previous backups");
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("STATUS SYMBOLS").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("(space)").color(Colors::GREEN)); ui.label("= Backed up and unchanged"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("M").color(Colors::YELLOW)); ui.label("= Modified since last backup"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("+").color(Colors::CYAN)); ui.label("= New, not yet backed up"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("-").color(Colors::DARK_GRAY)); ui.label("= Deleted from your system"); });
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("NAVIGATION").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("j/Down").color(Colors::CYAN)); ui.label("Move down"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("k/Up").color(Colors::CYAN)); ui.label("Move up"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Tab").color(Colors::CYAN)); ui.label("Next tab"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Shift+Tab").color(Colors::CYAN)); ui.label("Previous tab"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Space").color(Colors::CYAN)); ui.label("Toggle selection"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("v").color(Colors::CYAN)); ui.label("View file contents"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("q").color(Colors::CYAN)); ui.label("Quit (saves changes)"); });
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("TRACKED FILES TAB").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("b").color(Colors::CYAN)); ui.label("Run backup now"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("B").color(Colors::CYAN)); ui.label("Backup with custom message"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("d").color(Colors::CYAN)); ui.label("Stop tracking this file"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Right/l").color(Colors::CYAN)); ui.label("Expand folder"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Left/h").color(Colors::CYAN)); ui.label("Collapse folder"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("e").color(Colors::CYAN)); ui.label("Expand all folders"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("E").color(Colors::CYAN)); ui.label("Collapse all folders"); });
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("ADD FILES TAB").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("Enter/l").color(Colors::CYAN)); ui.label("Open folder / Add file"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("A").color(Colors::CYAN)); ui.label("Add folder as pattern (/**)"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("R").color(Colors::CYAN)); ui.label("Recursive add preview"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Backspace/h").color(Colors::CYAN)); ui.label("Go to parent directory"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("a").color(Colors::CYAN)); ui.label("Type a path manually"); });
+                    ui.add_space(10.0);
+
+                    if ui.button("Close (Esc)").clicked() {
+                        self.app.show_help = false;
+                    }
+                });
+            });
+    }
+
+    fn render_viewer_overlay(&mut self, ctx: &egui::Context) {
+        let title = self.app.viewer_title.clone();
+        let total_lines = self.app.viewer_content.len();
+        let scroll_pos = if total_lines > 0 {
+            format!("{}/{}", self.app.viewer_scroll + 1, total_lines)
+        } else {
+            "0/0".to_string()
+        };
+
+        // Clone the content we need
+        let content: Vec<_> = self.app.viewer_content.iter().cloned().collect();
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(true)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_size([800.0, 600.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("q: close | j/k: scroll | g/G: top/bottom").color(Colors::DARK_GRAY));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(&scroll_pos).color(Colors::DARK_GRAY));
+                    });
+                });
+                ui.separator();
+
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for line in &content {
+                            if line.file_header {
+                                let text = line.spans.first()
+                                    .map(|(t, _)| t.clone())
+                                    .unwrap_or_default();
+                                ui.label(RichText::new(text).color(Colors::CYAN).strong().monospace());
+                            } else {
+                                ui.horizontal(|ui| {
+                                    for (text, style) in &line.spans {
+                                        let color = egui_color(style.fg.unwrap_or(ratatui::style::Color::White));
+                                        ui.label(RichText::new(text).color(color).monospace());
+                                    }
+                                });
+                            }
+                        }
+                    });
+
+                if ui.button("Close").clicked() {
+                    self.app.close_viewer();
+                }
+            });
+    }
+
+    fn render_status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // Left: version
+            let version = env!("CARGO_PKG_VERSION");
+            ui.label(RichText::new(format!("v{}", version)).color(Colors::DARK_GRAY));
+            ui.separator();
+
+            if self.app.busy {
+                let spinner = SPINNER_FRAMES[self.app.spinner_frame];
+                ui.label(RichText::new(format!("{} {}", spinner, self.app.busy_message)).color(Colors::YELLOW));
+            } else if let Some(ref msg) = self.app.message.clone() {
+                ui.label(RichText::new(msg).color(Colors::CYAN));
+            } else {
+                // Mode-specific clickable action buttons
+                match self.app.mode {
+                    TuiMode::Status => {
+                        if ui.button("Backup (b)").clicked() {
+                            self.app.perform_backup(None);
+                        }
+                        if ui.button("Remove (d)").clicked() {
+                            self.app.toggle_tracking();
+                        }
+                        if ui.button("View (v)").clicked() {
+                            self.app.open_viewer();
+                        }
+                    }
+                    TuiMode::Add => {
+                        if ui.button("Add (Enter)").clicked() {
+                            self.app.toggle_tracking();
+                        }
+                        if ui.button("Folder (A)").clicked() {
+                            self.app.add_folder_pattern();
+                        }
+                        if ui.button("Recursive (R)").clicked() {
+                            self.app.start_recursive_preview();
+                        }
+                    }
+                    TuiMode::Browse => {
+                        match self.app.restore_view {
+                            RestoreView::Commits => {
+                                if ui.button("Select (Enter)").clicked() {
+                                    self.app.select_commit();
+                                }
+                            }
+                            RestoreView::Files => {
+                                if ui.button("Restore (Enter)").clicked() {
+                                    self.app.perform_restore();
+                                }
+                                if ui.button("Back").clicked() {
+                                    self.app.back_to_commits();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Right-aligned: item count, Help button
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Help (?)").clicked() {
+                        self.app.show_help = true;
+                    }
+                    ui.separator();
+
+                    let (total, selected) = match self.app.mode {
+                        TuiMode::Status => (self.app.files.len(), self.app.selected.len()),
+                        TuiMode::Browse => match self.app.restore_view {
+                            RestoreView::Commits => (self.app.commits.len(), self.app.selected.len()),
+                            RestoreView::Files => (self.app.restore_files.len(), self.app.selected.len()),
+                        },
+                        TuiMode::Add => (self.app.files.len(), self.app.selected.len()),
+                    };
+
+                    if selected > 0 {
+                        ui.label(RichText::new(format!("{} selected / {} items", selected, total)).color(Colors::CYAN));
+                    } else {
+                        ui.label(RichText::new(format!("{} items", total)).color(Colors::DARK_GRAY));
+                    }
+                });
+            }
+        });
+    }
+}
+
+impl eframe::App for GuiApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle keyboard input
+        self.handle_keyboard(ctx);
+
+        // Poll for backup completion
+        self.app.poll_backup();
+
+        // Request repaint if busy (for spinner animation)
+        if self.app.busy {
+            ctx.request_repaint();
+        }
+
+        // Quit handling
+        if self.app.should_quit {
+            let _ = self.app.save_if_dirty();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        // Bottom panel FIRST (renders at bottom, must be declared before CentralPanel)
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            self.render_status_bar(ui);
+        });
+
+        // Top panel for tabs
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.heading("Dot Matrix");
+            self.render_tabs(ui);
+        });
+
+        // Central panel fills remaining space
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Main content
+            if self.app.add_sub_mode == AddSubMode::RecursivePreview {
+                self.render_recursive_preview(ui);
+            } else {
+                match self.app.mode {
+                    TuiMode::Status => self.render_status_tab(ui),
+                    TuiMode::Add => self.render_add_tab(ui),
+                    TuiMode::Browse => self.render_restore_tab(ui),
+                }
+            }
+        });
+
+        // Overlays/dialogs
+        if self.app.show_help {
+            self.render_help_overlay(ctx);
+        }
+
+        if self.app.viewer_visible {
+            self.render_viewer_overlay(ctx);
+        }
+
+        if self.app.add_mode {
+            self.render_add_input_dialog(ctx);
+        }
+
+        if self.app.backup_message_mode {
+            self.render_backup_message_dialog(ctx);
+        }
+    }
+}
+
+/// Convert ratatui Color to egui Color32
+fn egui_color(color: ratatui::style::Color) -> Color32 {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
+        ratatui::style::Color::Green => Colors::GREEN,
+        ratatui::style::Color::Yellow => Colors::YELLOW,
+        ratatui::style::Color::Cyan => Colors::CYAN,
+        ratatui::style::Color::Red => Colors::RED,
+        ratatui::style::Color::Blue => Colors::BLUE,
+        ratatui::style::Color::Magenta => Colors::MAGENTA,
+        ratatui::style::Color::DarkGray | ratatui::style::Color::Gray => Colors::DARK_GRAY,
+        ratatui::style::Color::White | ratatui::style::Color::Reset => Colors::WHITE,
+        _ => Colors::WHITE,
+    }
+}
+
+/// Run the GUI application
+pub fn run(config: Config, index: Index, config_path: PathBuf, index_path: PathBuf, data_dir: PathBuf) -> Result<()> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Dot Matrix")
+            .with_inner_size([1000.0, 700.0])
+            .with_min_inner_size([600.0, 400.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "dotmatrix",
+        options,
+        Box::new(|_cc| {
+            Ok(Box::new(GuiApp::new(config, index, config_path, index_path, data_dir)))
+        }),
+    ).map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+
+    Ok(())
+}

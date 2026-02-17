@@ -20,6 +20,16 @@ impl BackupMode {
     }
 }
 
+/// Preferred interface mode
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PreferredInterface {
+    #[default]
+    Auto,
+    Gui,
+    Tui,
+}
+
 /// A tracked file pattern with optional per-pattern settings
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(untagged)]
@@ -85,7 +95,7 @@ fn default_backup_mode() -> BackupMode {
 pub struct Config {
     /// Custom data directory path (optional, defaults to system data dir)
     /// On Linux: ~/.local/share/dotmatrix
-    /// On Windows: C:\Users\<User>\AppData\Local\dotmatrix
+    /// On Windows: C:\Users\<User>\Documents\dotmatrix
     /// On macOS: ~/Library/Application Support/dotmatrix
     #[serde(default)]
     pub data_dir: Option<String>,
@@ -94,6 +104,12 @@ pub struct Config {
     pub backup_mode: BackupMode,
     pub tracked_files: Vec<TrackedPattern>,
     pub exclude: Vec<String>,
+    /// Preferred interface when running without arguments
+    /// "auto" = platform default (GUI on Windows, TUI on Linux/macOS)
+    /// "gui" = always use GUI
+    /// "tui" = always use TUI
+    #[serde(default)]
+    pub preferred_interface: PreferredInterface,
 }
 
 impl Default for Config {
@@ -123,6 +139,7 @@ impl Default for Config {
                 "**/.DS_Store".to_string(),
                 "**/node_modules/**".to_string(),
             ],
+            preferred_interface: PreferredInterface::Auto,
         }
     }
 }
