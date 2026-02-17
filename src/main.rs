@@ -1,6 +1,6 @@
 use chrono::{Local, TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use dotmatrix::config::{BackupMode, Config, PreferredInterface, TrackedPattern};
+use dotmatrix::config::{ArchiveFormat, BackupMode, Config, PreferredInterface, TrackedPattern};
 use dotmatrix::index::{FileEntry, Index};
 use dotmatrix::scanner::{self, RecursiveScanOptions, Verbosity};
 use dotmatrix::tui;
@@ -8,9 +8,11 @@ use dotmatrix::gui;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tar::Builder;
+use zip::write::SimpleFileOptions;
 
 #[derive(Parser)]
 #[command(name = "dotmatrix")]
@@ -824,7 +826,7 @@ fn backup_incremental(
     Ok(())
 }
 
-/// Backup using compressed tarball (archive mode)
+/// Backup using compressed archive (archive mode)
 fn backup_archive(
     files: &[PathBuf],
     index: &mut Index,
@@ -832,21 +834,78 @@ fn backup_archive(
     data_dir: &PathBuf,
     message: Option<String>,
     git_enabled: bool,
+    archive_format: ArchiveFormat,
 ) -> anyhow::Result<()> {
-    println!("Mode: archive (compressed tarball)\n");
+    let format_desc = match archive_format {
+        ArchiveFormat::TarGz => "tar.gz",
+        ArchiveFormat::Zip => "zip",
+        ArchiveFormat::SevenZip => "7z",
+    };
+    println!("Mode: archive ({})\n", format_desc);
 
     let archives_dir = dotmatrix::get_archives_path()?;
     fs::create_dir_all(&archives_dir)?;
 
     // Generate timestamped filename
     let timestamp = Local::now().format("%Y-%m-%d-%H%M%S");
-    let archive_name = format!("backup-{}.tar.gz", timestamp);
+    let archive_name = format!("backup-{}.{}", timestamp, archive_format.extension());
     let archive_path = archives_dir.join(&archive_name);
 
     println!("Creating archive: {}\n", archive_name);
 
-    // Create gzipped tar archive
-    let tar_gz = File::create(&archive_path)?;
+    let (archived, errors) = match archive_format {
+        ArchiveFormat::TarGz => create_tar_gz_archive(files, &archive_path, index)?,
+        ArchiveFormat::Zip => create_zip_archive(files, &archive_path, index)?,
+        ArchiveFormat::SevenZip => create_7z_archive(files, &archive_path, index)?,
+    };
+
+    // Update symlink to latest (Unix only)
+    #[cfg(unix)]
+    {
+        let latest_link = archives_dir.join(format!("latest.{}", archive_format.extension()));
+        if latest_link.exists() || latest_link.is_symlink() {
+            fs::remove_file(&latest_link).ok();
+        }
+        std::os::unix::fs::symlink(&archive_name, &latest_link).ok();
+    }
+
+    index.save(index_path)?;
+
+    // Get archive size
+    let archive_size = fs::metadata(&archive_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let size_str = if archive_size > 1024 * 1024 {
+        format!("{:.1} MB", archive_size as f64 / (1024.0 * 1024.0))
+    } else if archive_size > 1024 {
+        format!("{:.1} KB", archive_size as f64 / 1024.0)
+    } else {
+        format!("{} bytes", archive_size)
+    };
+
+    if git_enabled {
+        let msg = message.unwrap_or_else(|| format!("Archive backup: {}", archive_name));
+        git_commit(data_dir, msg, archived)?;
+    }
+
+    println!("\n📊 Archive complete:");
+    println!("   Files archived: {}", archived);
+    if errors > 0 {
+        println!("   Errors: {}", errors);
+    }
+    println!("   Archive size: {}", size_str);
+    println!("\n✓ Archive saved to: {}", archive_path.display());
+
+    Ok(())
+}
+
+/// Create a tar.gz archive
+fn create_tar_gz_archive(
+    files: &[PathBuf],
+    archive_path: &Path,
+    index: &mut Index,
+) -> anyhow::Result<(usize, usize)> {
+    let tar_gz = File::create(archive_path)?;
     let enc = GzEncoder::new(tar_gz, Compression::default());
     let mut tar = Builder::new(enc);
 
@@ -887,42 +946,131 @@ fn backup_archive(
     let enc = tar.into_inner()?;
     enc.finish()?;
 
-    // Update symlink to latest
-    let latest_link = archives_dir.join("latest.tar.gz");
-    if latest_link.exists() || latest_link.is_symlink() {
-        fs::remove_file(&latest_link).ok();
+    Ok((archived, errors))
+}
+
+/// Create a ZIP archive
+fn create_zip_archive(
+    files: &[PathBuf],
+    archive_path: &Path,
+    index: &mut Index,
+) -> anyhow::Result<(usize, usize)> {
+    let file = File::create(archive_path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archived = 0;
+    let mut errors = 0;
+
+    for file_path in files {
+        print!("Adding: {} ... ", file_path.display());
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        match scanner::scan_file(file_path) {
+            Ok(entry) => {
+                // Strip leading / to make path relative for zip
+                let archive_name = file_path
+                    .to_string_lossy()
+                    .trim_start_matches('/')
+                    .to_string();
+
+                match fs::read(file_path) {
+                    Ok(content) => {
+                        match zip.start_file(&archive_name, options) {
+                            Ok(_) => {
+                                if let Err(e) = zip.write_all(&content) {
+                                    println!("❌ {}", e);
+                                    errors += 1;
+                                } else {
+                                    println!("✓");
+                                    index.add_file(file_path.clone(), entry);
+                                    archived += 1;
+                                }
+                            }
+                            Err(e) => {
+                                println!("❌ {}", e);
+                                errors += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("❌ {}", e);
+                        errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ {}", e);
+                errors += 1;
+            }
+        }
     }
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&archive_name, &latest_link).ok();
 
-    index.save(index_path)?;
+    zip.finish()?;
+    Ok((archived, errors))
+}
 
-    // Get archive size
-    let archive_size = fs::metadata(&archive_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-    let size_str = if archive_size > 1024 * 1024 {
-        format!("{:.1} MB", archive_size as f64 / (1024.0 * 1024.0))
-    } else if archive_size > 1024 {
-        format!("{:.1} KB", archive_size as f64 / 1024.0)
-    } else {
-        format!("{} bytes", archive_size)
-    };
+/// Create a 7z archive
+fn create_7z_archive(
+    files: &[PathBuf],
+    archive_path: &Path,
+    index: &mut Index,
+) -> anyhow::Result<(usize, usize)> {
+    use sevenz_rust::SevenZWriter;
+    use std::io::Cursor;
 
-    if git_enabled {
-        let msg = message.unwrap_or_else(|| format!("Archive backup: {}", archive_name));
-        git_commit(data_dir, msg, archived)?;
+    let mut sz = SevenZWriter::create(archive_path)?;
+
+    let mut archived = 0;
+    let mut errors = 0;
+
+    for file_path in files {
+        print!("Adding: {} ... ", file_path.display());
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        match scanner::scan_file(file_path) {
+            Ok(entry) => {
+                // Strip leading / to make path relative
+                let archive_name = file_path
+                    .to_string_lossy()
+                    .trim_start_matches('/')
+                    .to_string();
+
+                match fs::read(file_path) {
+                    Ok(content) => {
+                        let mut reader = Cursor::new(content);
+                        match sz.push_archive_entry(
+                            sevenz_rust::SevenZArchiveEntry::from_path(file_path, archive_name),
+                            Some(&mut reader),
+                        ) {
+                            Ok(_) => {
+                                println!("✓");
+                                index.add_file(file_path.clone(), entry);
+                                archived += 1;
+                            }
+                            Err(e) => {
+                                println!("❌ {}", e);
+                                errors += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("❌ {}", e);
+                        errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ {}", e);
+                errors += 1;
+            }
+        }
     }
 
-    println!("\n📊 Archive complete:");
-    println!("   Files archived: {}", archived);
-    if errors > 0 {
-        println!("   Errors: {}", errors);
-    }
-    println!("   Archive size: {}", size_str);
-    println!("\n✓ Archive saved to: {}", archive_path.display());
-
-    Ok(())
+    sz.finish()?;
+    Ok((archived, errors))
 }
 
 /// Check if a file path matches a glob pattern (with ~ expansion)
@@ -1035,6 +1183,7 @@ fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<(
             &data_dir,
             None, // Don't commit yet
             false, // Don't commit yet
+            config.archive_format,
         )?;
     }
 

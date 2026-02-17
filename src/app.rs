@@ -883,10 +883,16 @@ impl App {
         if self.mode != TuiMode::Add {
             return;
         }
+        let current_dir = self.browse_dir.clone();
         if let Some(parent) = self.browse_dir.parent() {
             self.browse_dir = parent.to_path_buf();
-            self.list_state.select(Some(0));
             self.refresh_files();
+            // Find and select the directory we came from
+            if let Some(idx) = self.files.iter().position(|f| f.path == current_dir) {
+                self.list_state.select(Some(idx));
+            } else {
+                self.list_state.select(Some(0));
+            }
         }
     }
 

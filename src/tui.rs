@@ -442,11 +442,12 @@ fn ui(f: &mut Frame, app: &App) {
         .iter()
         .map(|t| Line::from(*t))
         .collect();
+    let tab_title = format!(" {} ", TuiMode::titles()[app.mode.index()]);
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Dot Matrix "),
+                .title(tab_title),
         )
         .select(app.mode.index())
         .style(Style::default().fg(Color::White))
@@ -868,6 +869,15 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
     let dim_style = Style::default().fg(Color::DarkGray);
 
     let help_lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(Span::styled("  ABOUT DOT MATRIX", header_style)),
+        Line::from(Span::styled("  =================", dim_style)),
+        Line::from(vec![
+            Span::raw("  Version: "),
+            Span::styled(env!("CARGO_PKG_VERSION"), key_style),
+        ]),
+        Line::from("  Dotfile management and versioning tool"),
+        Line::from("  Track configuration files in-place with git-based versioning."),
         Line::from(""),
         Line::from(Span::styled("  WHAT EACH TAB DOES", header_style)),
         Line::from(Span::styled("  ==================", dim_style)),

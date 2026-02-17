@@ -20,6 +20,34 @@ impl BackupMode {
     }
 }
 
+/// Archive format for archive backup mode
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ArchiveFormat {
+    Zip,
+    TarGz,
+    SevenZip,
+}
+
+impl Default for ArchiveFormat {
+    fn default() -> Self {
+        #[cfg(windows)]
+        { ArchiveFormat::Zip }
+        #[cfg(not(windows))]
+        { ArchiveFormat::TarGz }
+    }
+}
+
+impl ArchiveFormat {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ArchiveFormat::Zip => "zip",
+            ArchiveFormat::TarGz => "tar.gz",
+            ArchiveFormat::SevenZip => "7z",
+        }
+    }
+}
+
 /// Preferred interface mode
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -102,6 +130,12 @@ pub struct Config {
     pub git_enabled: bool,
     #[serde(default = "default_backup_mode")]
     pub backup_mode: BackupMode,
+    /// Archive format for archive backup mode
+    /// "zip" = ZIP archive (default on Windows)
+    /// "targz" = tar.gz archive (default on Linux/macOS)
+    /// "sevenzip" = 7z archive
+    #[serde(default)]
+    pub archive_format: ArchiveFormat,
     pub tracked_files: Vec<TrackedPattern>,
     pub exclude: Vec<String>,
     /// Preferred interface when running without arguments
@@ -133,6 +167,7 @@ impl Default for Config {
             data_dir: None,  // Use system default
             git_enabled: true,
             backup_mode: BackupMode::Incremental,
+            archive_format: ArchiveFormat::default(),
             tracked_files: default_tracked,
             exclude: vec![
                 "**/*.log".to_string(),

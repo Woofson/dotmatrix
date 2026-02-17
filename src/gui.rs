@@ -55,15 +55,16 @@ impl GuiApp {
                 self.app.message = None;
             }
 
-            // Quit
-            if i.key_pressed(Key::Q) && !i.modifiers.ctrl {
+            // Ctrl+Q quits the application
+            if i.key_pressed(Key::Q) && i.modifiers.ctrl {
                 if !self.app.busy {
                     self.app.should_quit = true;
                 }
             }
 
-            // Escape handling - closes overlays and dialogs in order of priority
-            if i.key_pressed(Key::Escape) {
+            // Q without Ctrl and Escape both close overlays/go back (but don't quit)
+            let close_or_back = (i.key_pressed(Key::Q) && !i.modifiers.ctrl) || i.key_pressed(Key::Escape);
+            if close_or_back {
                 // First: close any open message/notification
                 if self.app.message.is_some() {
                     self.app.message = None;
@@ -90,23 +91,19 @@ impl GuiApp {
                     self.app.backup_message_input.clear();
                     self.app.backup_message_mode = false;
                 }
-                // Then: go back in Add mode or quit
+                // Then: go back in Add mode (but don't quit at home)
                 else if self.app.mode == TuiMode::Add {
                     let home = dirs::home_dir().unwrap_or_default();
-                    if self.app.browse_dir == home {
-                        self.app.should_quit = true;
-                    } else {
+                    if self.app.browse_dir != home {
                         self.app.parent_directory();
                     }
+                    // At home directory, do nothing - user must use Ctrl+Q to quit
                 }
                 // Then: go back in Restore files view
                 else if self.app.mode == TuiMode::Browse && self.app.restore_view == RestoreView::Files {
                     self.app.back_to_commits();
                 }
-                // Finally: quit
-                else {
-                    self.app.should_quit = true;
-                }
+                // At top level: do nothing - user must use Ctrl+Q to quit
             }
 
             // Help toggle
@@ -376,7 +373,8 @@ impl GuiApp {
                     let frame_response = egui::Frame::none()
                         .fill(bg_color)
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
+                            // Make entire row clickable
+                            let row_response = ui.horizontal(|ui| {
                                 // Selection marker
                                 let marker = if *is_multi_selected { "*" } else { " " };
                                 ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
@@ -402,17 +400,7 @@ impl GuiApp {
                                         .strong()
                                         .monospace();
 
-                                    // Use Label with click sense for better double-click detection
-                                    let response = ui.add(
-                                        egui::Label::new(folder_text)
-                                            .sense(egui::Sense::click())
-                                    );
-                                    if response.clicked() {
-                                        clicked_folder = Some(*i);
-                                    }
-                                    if response.double_clicked() {
-                                        double_clicked_folder = Some(*i);
-                                    }
+                                    ui.label(folder_text);
 
                                     // Stats
                                     let stats = format!(
@@ -446,13 +434,7 @@ impl GuiApp {
                                         .color(file_color)
                                         .monospace();
 
-                                    let response = ui.add(
-                                        egui::Label::new(file_text)
-                                            .sense(egui::Sense::click())
-                                    );
-                                    if response.clicked() {
-                                        clicked_item = Some(*i);
-                                    }
+                                    ui.label(file_text);
 
                                     // Size
                                     if let Some(size) = file.size {
@@ -460,6 +442,21 @@ impl GuiApp {
                                     }
                                 }
                             });
+
+                            // Detect clicks on the entire row
+                            let row_rect = row_response.response.rect;
+                            let sense_response = ui.interact(row_rect, egui::Id::new("status_row").with(*i), egui::Sense::click());
+                            if file.is_folder_node {
+                                if sense_response.double_clicked() {
+                                    double_clicked_folder = Some(*i);
+                                } else if sense_response.clicked() {
+                                    clicked_folder = Some(*i);
+                                }
+                            } else {
+                                if sense_response.clicked() {
+                                    clicked_item = Some(*i);
+                                }
+                            }
                         });
 
                     // Scroll to selected item
@@ -576,7 +573,8 @@ impl GuiApp {
                     let frame_response = egui::Frame::none()
                         .fill(bg_color)
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
+                            // Make entire row clickable
+                            let row_response = ui.horizontal(|ui| {
                                 let marker = if *is_multi_selected { "*" } else { " " };
                                 ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
 
@@ -597,18 +595,7 @@ impl GuiApp {
 
                                 let text = if file.is_dir { text.strong() } else { text };
 
-                                // Use a clickable label with proper sense for double-click
-                                let response = ui.add(
-                                    egui::Label::new(text)
-                                        .sense(egui::Sense::click())
-                                );
-
-                                if response.clicked() {
-                                    clicked_item = Some(*i);
-                                }
-                                if response.double_clicked() {
-                                    double_clicked_item = Some(*i);
-                                }
+                                ui.label(text);
 
                                 if file.is_tracked {
                                     ui.label(RichText::new(" [tracked]").color(Colors::GREEN).monospace());
@@ -618,6 +605,15 @@ impl GuiApp {
                                     ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
                                 }
                             });
+
+                            // Detect clicks on the entire row
+                            let row_rect = row_response.response.rect;
+                            let sense_response = ui.interact(row_rect, egui::Id::new("add_row").with(*i), egui::Sense::click());
+                            if sense_response.double_clicked() {
+                                double_clicked_item = Some(*i);
+                            } else if sense_response.clicked() {
+                                clicked_item = Some(*i);
+                            }
                         });
 
                     // Scroll to selected item
@@ -1100,7 +1096,8 @@ impl GuiApp {
                     ui.horizontal(|ui| { ui.label(RichText::new("Shift+Tab").color(Colors::CYAN)); ui.label("Previous tab"); });
                     ui.horizontal(|ui| { ui.label(RichText::new("Space").color(Colors::CYAN)); ui.label("Toggle selection"); });
                     ui.horizontal(|ui| { ui.label(RichText::new("v").color(Colors::CYAN)); ui.label("View file contents"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("q").color(Colors::CYAN)); ui.label("Quit (saves changes)"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("q/Esc").color(Colors::CYAN)); ui.label("Close dialog / Go back"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Ctrl+Q").color(Colors::CYAN)); ui.label("Quit (saves changes)"); });
                     ui.add_space(10.0);
 
                     ui.label(RichText::new("TRACKED FILES TAB").color(Colors::YELLOW).strong());
