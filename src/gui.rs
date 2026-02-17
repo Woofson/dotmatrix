@@ -269,24 +269,54 @@ impl GuiApp {
 
     fn render_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.add_space(10.0);
             for (i, title) in TuiMode::titles().iter().enumerate() {
                 let is_selected = self.app.mode.index() == i;
-                let text = if is_selected {
-                    RichText::new(*title).strong().color(Colors::YELLOW)
+
+                // Create a tab-like appearance with frame
+                let bg_color = if is_selected {
+                    Color32::from_rgb(50, 50, 70)
                 } else {
-                    RichText::new(*title).color(Colors::WHITE)
+                    Color32::from_rgb(35, 35, 45)
                 };
 
-                if ui.selectable_label(is_selected, text).clicked() {
-                    self.app.mode = TuiMode::from_index(i);
-                    self.app.selected.clear();
-                    self.app.refresh_files();
-                }
-                ui.add_space(20.0);
+                let text_color = if is_selected {
+                    Colors::YELLOW
+                } else {
+                    Colors::DARK_GRAY
+                };
+
+                let rounding = egui::Rounding {
+                    nw: 6.0,
+                    ne: 6.0,
+                    sw: 0.0,
+                    se: 0.0,
+                };
+
+                egui::Frame::none()
+                    .fill(bg_color)
+                    .rounding(rounding)
+                    .inner_margin(egui::Margin::symmetric(16.0, 8.0))
+                    .stroke(if is_selected {
+                        egui::Stroke::new(1.0, Colors::YELLOW)
+                    } else {
+                        egui::Stroke::NONE
+                    })
+                    .show(ui, |ui| {
+                        let text = RichText::new(*title).color(text_color);
+                        let text = if is_selected { text.strong() } else { text };
+
+                        if ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
+                            self.app.save_current_tab_state();
+                            self.app.mode = TuiMode::from_index(i);
+                            self.app.selected.clear();
+                            self.app.refresh_files();
+                            self.app.restore_tab_state();
+                        }
+                    });
+
+                ui.add_space(2.0);
             }
         });
-        ui.separator();
     }
 
     fn render_status_tab(&mut self, ui: &mut egui::Ui) {
@@ -304,6 +334,7 @@ impl GuiApp {
 
         let mut clicked_folder: Option<usize> = None;
         let mut clicked_item: Option<usize> = None;
+        let mut double_clicked_folder: Option<usize> = None;
 
         ScrollArea::vertical().show(ui, |ui| {
             for (i, file, is_selected, is_multi_selected, expanded) in &items {
@@ -342,8 +373,12 @@ impl GuiApp {
                                     .strong()
                                     .monospace();
 
-                                if ui.selectable_label(false, folder_text).clicked() {
+                                let response = ui.selectable_label(false, folder_text);
+                                if response.clicked() {
                                     clicked_folder = Some(*i);
+                                }
+                                if response.double_clicked() {
+                                    double_clicked_folder = Some(*i);
                                 }
 
                                 // Stats
@@ -393,9 +428,12 @@ impl GuiApp {
         });
 
         // Handle clicks after iteration
-        if let Some(i) = clicked_folder {
+        // Double-click on folder expands/collapses it
+        if let Some(i) = double_clicked_folder {
             self.app.list_state.select(Some(i));
             self.app.toggle_folder();
+        } else if let Some(i) = clicked_folder {
+            self.app.list_state.select(Some(i));
         } else if let Some(i) = clicked_item {
             self.app.list_state.select(Some(i));
         }
@@ -442,17 +480,32 @@ impl GuiApp {
     }
 
     fn render_add_tab(&mut self, ui: &mut egui::Ui) {
-        // Path display
-        let path_display = if let Some(home) = dirs::home_dir() {
-            if let Ok(rel) = self.app.browse_dir.strip_prefix(&home) {
-                format!("~/{}", rel.display())
+        // Navigation toolbar
+        ui.horizontal(|ui| {
+            // Back button
+            if ui.button("⬅ Back").clicked() {
+                self.app.parent_directory();
+            }
+
+            // Home button
+            if ui.button("🏠 Home").clicked() {
+                self.app.home_directory();
+            }
+
+            ui.separator();
+
+            // Path display
+            let path_display = if let Some(home) = dirs::home_dir() {
+                if let Ok(rel) = self.app.browse_dir.strip_prefix(&home) {
+                    format!("~/{}", rel.display())
+                } else {
+                    self.app.browse_dir.display().to_string()
+                }
             } else {
                 self.app.browse_dir.display().to_string()
-            }
-        } else {
-            self.app.browse_dir.display().to_string()
-        };
-        ui.label(RichText::new(format!("{} - Select a file and press Enter to track it", path_display)).color(Colors::DARK_GRAY));
+            };
+            ui.label(RichText::new(&path_display).color(Colors::CYAN).strong());
+        });
         ui.add_space(5.0);
 
         // Collect items to avoid borrowing issues
@@ -463,6 +516,7 @@ impl GuiApp {
         }).collect();
 
         let mut clicked_item: Option<usize> = None;
+        let mut double_clicked_item: Option<usize> = None;
 
         ScrollArea::vertical().show(ui, |ui| {
             for (i, file, is_selected, is_multi_selected) in &items {
@@ -496,8 +550,12 @@ impl GuiApp {
 
                             let text = if file.is_dir { text.strong() } else { text };
 
-                            if ui.selectable_label(false, text).clicked() {
+                            let response = ui.selectable_label(false, text);
+                            if response.clicked() {
                                 clicked_item = Some(*i);
+                            }
+                            if response.double_clicked() {
+                                double_clicked_item = Some(*i);
                             }
 
                             if file.is_tracked {
@@ -512,7 +570,17 @@ impl GuiApp {
             }
         });
 
-        if let Some(i) = clicked_item {
+        // Handle double-click first (opens folders or adds files)
+        if let Some(i) = double_clicked_item {
+            self.app.list_state.select(Some(i));
+            if i < self.app.files.len() {
+                if self.app.files[i].is_dir {
+                    self.app.enter_directory();
+                } else {
+                    self.app.toggle_tracking();
+                }
+            }
+        } else if let Some(i) = clicked_item {
             self.app.list_state.select(Some(i));
         }
 
@@ -598,8 +666,14 @@ impl GuiApp {
                                     };
                                     ui.label(RichText::new(date_short).color(Colors::CYAN).monospace());
 
-                                    if ui.selectable_label(false, RichText::new(&commit.message).monospace()).clicked() {
+                                    let response = ui.selectable_label(false, RichText::new(&commit.message).monospace());
+                                    if response.clicked() {
                                         clicked_item = Some(*i);
+                                    }
+                                    if response.double_clicked() {
+                                        // Double-click selects the commit immediately
+                                        self.app.restore_list_state.select(Some(*i));
+                                        self.app.select_commit();
                                     }
                                 });
                             });
@@ -1009,7 +1083,8 @@ impl GuiApp {
 
     fn render_status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // Left: version
+            // Left: app name and version
+            ui.label(RichText::new("Dot Matrix").color(Colors::WHITE).strong());
             let version = env!("CARGO_PKG_VERSION");
             ui.label(RichText::new(format!("v{}", version)).color(Colors::DARK_GRAY));
             ui.separator();
@@ -1114,9 +1189,8 @@ impl eframe::App for GuiApp {
             self.render_status_bar(ui);
         });
 
-        // Top panel for tabs
+        // Top panel for tabs only (no heading - app name moved to status bar)
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.heading("Dot Matrix");
             self.render_tabs(ui);
         });
 

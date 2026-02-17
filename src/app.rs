@@ -1062,7 +1062,7 @@ impl App {
     }
 
     /// Save current tab's cursor state before switching
-    fn save_current_tab_state(&mut self) {
+    pub fn save_current_tab_state(&mut self) {
         match self.mode {
             TuiMode::Status => {
                 self.status_tab_state.cursor_index = self.list_state.selected();
@@ -1084,7 +1084,7 @@ impl App {
     }
 
     /// Restore tab's cursor state after switching
-    fn restore_tab_state(&mut self) {
+    pub fn restore_tab_state(&mut self) {
         match self.mode {
             TuiMode::Status => {
                 if let Some(idx) = self.status_tab_state.cursor_index {
