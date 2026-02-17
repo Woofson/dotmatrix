@@ -356,9 +356,11 @@ impl GuiApp {
         }).collect();
 
         let selected_idx = self.app.list_state.selected();
-        let mut clicked_folder: Option<usize> = None;
-        let mut clicked_item: Option<usize> = None;
+
+        // Track which item was clicked/right-clicked
+        let mut new_selection: Option<usize> = None;
         let mut double_clicked_folder: Option<usize> = None;
+        let mut right_clicked_item: Option<(usize, egui::Response)> = None;
 
         ScrollArea::vertical()
             .id_salt("status_tab_scroll")
@@ -370,150 +372,149 @@ impl GuiApp {
                         Color32::TRANSPARENT
                     };
 
-                    let frame_response = egui::Frame::none()
-                        .fill(bg_color)
-                        .show(ui, |ui| {
-                            // Make entire row clickable
-                            let row_response = ui.horizontal(|ui| {
-                                // Selection marker
-                                let marker = if *is_multi_selected { "*" } else { " " };
-                                ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                    // Allocate space for the row and get a response for click detection
+                    let (row_rect, row_response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::click(),
+                    );
 
-                                if file.is_folder_node {
-                                    // Folder row
-                                    let expand_icon = if *expanded { "▼" } else { "▶" };
+                    // Draw background
+                    if *is_selected || row_response.hovered() {
+                        let color = if *is_selected { bg_color } else { Color32::from_rgb(45, 45, 55) };
+                        ui.painter().rect_filled(row_rect, 0.0, color);
+                    }
 
-                                    // Status indicator
-                                    let (status, color) = if file.modified_count > 0 {
-                                        ("M", Colors::YELLOW)
-                                    } else if file.new_count > 0 {
-                                        ("+", Colors::CYAN)
-                                    } else {
-                                        (" ", Colors::GREEN)
-                                    };
-                                    ui.label(RichText::new(status).color(color).monospace());
+                    // Draw the row content
+                    let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                    content_ui.set_clip_rect(row_rect);
 
-                                    ui.label(RichText::new(expand_icon).color(Colors::BLUE).monospace());
+                    // Selection marker
+                    let marker = if *is_multi_selected { "*" } else { " " };
+                    content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
 
-                                    let folder_text = RichText::new(&file.display_path)
-                                        .color(Colors::BLUE)
-                                        .strong()
-                                        .monospace();
+                    if file.is_folder_node {
+                        // Folder row
+                        let expand_icon = if *expanded { "▼" } else { "▶" };
 
-                                    ui.label(folder_text);
+                        // Status indicator
+                        let (status, color) = if file.modified_count > 0 {
+                            ("M", Colors::YELLOW)
+                        } else if file.new_count > 0 {
+                            ("+", Colors::CYAN)
+                        } else {
+                            (" ", Colors::GREEN)
+                        };
+                        content_ui.label(RichText::new(status).color(color).monospace());
+                        content_ui.label(RichText::new(expand_icon).color(Colors::BLUE).monospace());
 
-                                    // Stats
-                                    let stats = format!(
-                                        "({} files{}{})",
-                                        file.child_count,
-                                        if file.modified_count > 0 { format!(", {} modified", file.modified_count) } else { String::new() },
-                                        if file.new_count > 0 { format!(", {} new", file.new_count) } else { String::new() }
-                                    );
-                                    ui.label(RichText::new(stats).color(Colors::DARK_GRAY).monospace());
-                                } else {
-                                    // File row
-                                    let status_color = file.status.color();
-                                    let status_symbol = file.status.symbol();
+                        let folder_text = RichText::new(&file.display_path)
+                            .color(Colors::BLUE)
+                            .strong()
+                            .monospace();
+                        content_ui.label(folder_text);
 
-                                    ui.label(RichText::new(status_symbol).color(egui_color(status_color)).monospace());
+                        // Stats
+                        let stats = format!(
+                            "({} files{}{})",
+                            file.child_count,
+                            if file.modified_count > 0 { format!(", {} modified", file.modified_count) } else { String::new() },
+                            if file.new_count > 0 { format!(", {} new", file.new_count) } else { String::new() }
+                        );
+                        content_ui.label(RichText::new(stats).color(Colors::DARK_GRAY).monospace());
+                    } else {
+                        // File row
+                        let status_color = file.status.color();
+                        let status_symbol = file.status.symbol();
 
-                                    // Indentation
-                                    let indent = "    ".repeat(file.depth);
-                                    ui.label(RichText::new(&indent).monospace());
+                        content_ui.label(RichText::new(status_symbol).color(egui_color(status_color)).monospace());
 
-                                    // Mode indicator
-                                    let mode_str = match file.backup_mode {
-                                        Some(BackupMode::Archive) => "[A]",
-                                        Some(BackupMode::Incremental) => "[I]",
-                                        None => "   ",
-                                    };
-                                    ui.label(RichText::new(mode_str).color(Colors::BLUE).monospace());
+                        // Indentation
+                        let indent = "    ".repeat(file.depth);
+                        content_ui.label(RichText::new(&indent).monospace());
 
-                                    let file_color = if file.is_tracked { Colors::WHITE } else { Colors::DARK_GRAY };
-                                    let file_text = RichText::new(&file.display_path)
-                                        .color(file_color)
-                                        .monospace();
+                        // Mode indicator
+                        let mode_str = match file.backup_mode {
+                            Some(BackupMode::Archive) => "[A]",
+                            Some(BackupMode::Incremental) => "[I]",
+                            None => "   ",
+                        };
+                        content_ui.label(RichText::new(mode_str).color(Colors::BLUE).monospace());
 
-                                    ui.label(file_text);
+                        let file_color = if file.is_tracked { Colors::WHITE } else { Colors::DARK_GRAY };
+                        let file_text = RichText::new(&file.display_path)
+                            .color(file_color)
+                            .monospace();
+                        content_ui.label(file_text);
 
-                                    // Size
-                                    if let Some(size) = file.size {
-                                        ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
-                                    }
-                                }
-                            });
+                        // Size
+                        if let Some(size) = file.size {
+                            content_ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                        }
+                    }
 
-                            // Detect clicks on the entire row
-                            let row_rect = row_response.response.rect;
-                            let sense_response = ui.interact(row_rect, egui::Id::new("status_row").with(*i), egui::Sense::click());
-                            if file.is_folder_node {
-                                if sense_response.double_clicked() {
-                                    double_clicked_folder = Some(*i);
-                                } else if sense_response.clicked() {
-                                    clicked_folder = Some(*i);
-                                }
-                            } else {
-                                if sense_response.clicked() {
-                                    clicked_item = Some(*i);
-                                }
-                            }
-                        });
+                    // Handle clicks on this row
+                    if row_response.clicked() {
+                        new_selection = Some(*i);
+                    }
+                    if row_response.double_clicked() && file.is_folder_node {
+                        double_clicked_folder = Some(*i);
+                    }
+                    if row_response.secondary_clicked() {
+                        new_selection = Some(*i);
+                        right_clicked_item = Some((*i, row_response.clone()));
+                    }
 
                     // Scroll to selected item
                     if selected_idx == Some(*i) {
-                        frame_response.response.scroll_to_me(Some(egui::Align::Center));
+                        row_response.scroll_to_me(Some(egui::Align::Center));
                     }
                 }
             });
 
-        // Handle clicks after iteration
-        // Double-click on folder expands/collapses it
-        if let Some(i) = double_clicked_folder {
-            self.app.list_state.select(Some(i));
-            self.app.toggle_folder();
-        } else if let Some(i) = clicked_folder {
-            self.app.list_state.select(Some(i));
-        } else if let Some(i) = clicked_item {
+        // Apply selection change
+        if let Some(i) = new_selection {
             self.app.list_state.select(Some(i));
         }
 
-        // Context menu (right-click)
-        if let Some(i) = self.app.list_state.selected() {
+        // Handle double-click on folder
+        if let Some(i) = double_clicked_folder {
+            self.app.list_state.select(Some(i));
+            self.app.toggle_folder();
+        }
+
+        // Show context menu for right-clicked item
+        if let Some((i, response)) = right_clicked_item {
             if i < self.app.files.len() {
                 let file = self.app.files[i].clone();
-                let id = egui::Id::new("status_context").with(i);
-
-                // Check for right-click anywhere in the scroll area
-                ui.interact(ui.max_rect(), id, egui::Sense::click())
-                    .context_menu(|ui| {
-                        if file.is_folder_node {
-                            if self.app.expanded_folders.contains(&file.path) {
-                                if ui.button("Collapse Folder").clicked() {
-                                    self.app.collapse_folder();
-                                    ui.close_menu();
-                                }
-                            } else {
-                                if ui.button("Expand Folder").clicked() {
-                                    self.app.expand_folder();
-                                    ui.close_menu();
-                                }
+                response.context_menu(|ui| {
+                    if file.is_folder_node {
+                        if self.app.expanded_folders.contains(&file.path) {
+                            if ui.button("Collapse Folder").clicked() {
+                                self.app.collapse_folder();
+                                ui.close_menu();
                             }
                         } else {
-                            if ui.button("View File").clicked() {
-                                self.app.open_viewer();
-                                ui.close_menu();
-                            }
-                            if ui.button("Backup Now").clicked() {
-                                self.app.perform_backup(None);
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Remove from Tracking").clicked() {
-                                self.app.toggle_tracking();
+                            if ui.button("Expand Folder").clicked() {
+                                self.app.expand_folder();
                                 ui.close_menu();
                             }
                         }
-                    });
+                    } else {
+                        if ui.button("View File").clicked() {
+                            self.app.open_viewer();
+                            ui.close_menu();
+                        }
+                        if ui.button("Backup Now").clicked() {
+                            self.app.perform_backup(None);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Remove from Tracking").clicked() {
+                            self.app.toggle_tracking();
+                            ui.close_menu();
+                        }
+                    }
+                });
             }
         }
     }
@@ -557,8 +558,11 @@ impl GuiApp {
         }).collect();
 
         let selected_idx = self.app.list_state.selected();
-        let mut clicked_item: Option<usize> = None;
+
+        // Track which item was clicked/right-clicked
+        let mut new_selection: Option<usize> = None;
         let mut double_clicked_item: Option<usize> = None;
+        let mut right_clicked_item: Option<(usize, egui::Response)> = None;
 
         ScrollArea::vertical()
             .id_salt("add_tab_scroll")
@@ -570,60 +574,77 @@ impl GuiApp {
                         Color32::TRANSPARENT
                     };
 
-                    let frame_response = egui::Frame::none()
-                        .fill(bg_color)
-                        .show(ui, |ui| {
-                            // Make entire row clickable
-                            let row_response = ui.horizontal(|ui| {
-                                let marker = if *is_multi_selected { "*" } else { " " };
-                                ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                    // Allocate space for the row and get a response for click detection
+                    let (row_rect, row_response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), 20.0),
+                        egui::Sense::click(),
+                    );
 
-                                let icon = if file.is_dir { "/" } else { " " };
-                                ui.label(RichText::new(icon).color(Colors::BLUE).monospace());
+                    // Draw background
+                    if *is_selected || row_response.hovered() {
+                        let color = if *is_selected { bg_color } else { Color32::from_rgb(45, 45, 55) };
+                        ui.painter().rect_filled(row_rect, 0.0, color);
+                    }
 
-                                let color = if file.is_dir {
-                                    Colors::BLUE
-                                } else if file.is_tracked {
-                                    Colors::GREEN
-                                } else {
-                                    Colors::WHITE
-                                };
+                    // Draw the row content
+                    let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                    content_ui.set_clip_rect(row_rect);
 
-                                let text = RichText::new(&file.display_path)
-                                    .color(color)
-                                    .monospace();
+                    let marker = if *is_multi_selected { "*" } else { " " };
+                    content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
 
-                                let text = if file.is_dir { text.strong() } else { text };
+                    let icon = if file.is_dir { "/" } else { " " };
+                    content_ui.label(RichText::new(icon).color(Colors::BLUE).monospace());
 
-                                ui.label(text);
+                    let color = if file.is_dir {
+                        Colors::BLUE
+                    } else if file.is_tracked {
+                        Colors::GREEN
+                    } else {
+                        Colors::WHITE
+                    };
 
-                                if file.is_tracked {
-                                    ui.label(RichText::new(" [tracked]").color(Colors::GREEN).monospace());
-                                }
+                    let text = RichText::new(&file.display_path)
+                        .color(color)
+                        .monospace();
 
-                                if let Some(size) = file.size {
-                                    ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
-                                }
-                            });
+                    let text = if file.is_dir { text.strong() } else { text };
 
-                            // Detect clicks on the entire row
-                            let row_rect = row_response.response.rect;
-                            let sense_response = ui.interact(row_rect, egui::Id::new("add_row").with(*i), egui::Sense::click());
-                            if sense_response.double_clicked() {
-                                double_clicked_item = Some(*i);
-                            } else if sense_response.clicked() {
-                                clicked_item = Some(*i);
-                            }
-                        });
+                    content_ui.label(text);
+
+                    if file.is_tracked {
+                        content_ui.label(RichText::new(" [tracked]").color(Colors::GREEN).monospace());
+                    }
+
+                    if let Some(size) = file.size {
+                        content_ui.label(RichText::new(format!("  {}", format_size(size))).color(Colors::DARK_GRAY).monospace());
+                    }
+
+                    // Handle clicks on this row
+                    if row_response.clicked() {
+                        new_selection = Some(*i);
+                    }
+                    if row_response.double_clicked() {
+                        double_clicked_item = Some(*i);
+                    }
+                    if row_response.secondary_clicked() {
+                        new_selection = Some(*i);
+                        right_clicked_item = Some((*i, row_response.clone()));
+                    }
 
                     // Scroll to selected item
                     if selected_idx == Some(*i) {
-                        frame_response.response.scroll_to_me(Some(egui::Align::Center));
+                        row_response.scroll_to_me(Some(egui::Align::Center));
                     }
                 }
             });
 
-        // Handle double-click first (opens folders or adds files)
+        // Apply selection change
+        if let Some(i) = new_selection {
+            self.app.list_state.select(Some(i));
+        }
+
+        // Handle double-click (opens folders or adds files)
         if let Some(i) = double_clicked_item {
             self.app.list_state.select(Some(i));
             if i < self.app.files.len() {
@@ -634,50 +655,45 @@ impl GuiApp {
                     self.app.toggle_tracking();
                 }
             }
-        } else if let Some(i) = clicked_item {
-            self.app.list_state.select(Some(i));
         }
 
-        // Context menu (right-click) for Add tab
-        if let Some(i) = self.app.list_state.selected() {
+        // Show context menu for right-clicked item
+        if let Some((i, response)) = right_clicked_item {
             if i < self.app.files.len() {
                 let file = self.app.files[i].clone();
-                let id = egui::Id::new("add_context").with(i);
-
-                ui.interact(ui.max_rect(), id, egui::Sense::click())
-                    .context_menu(|ui| {
-                        if file.is_dir {
-                            if ui.button("Open Folder").clicked() {
-                                self.app.enter_directory();
-                                ui.close_menu();
-                            }
-                            if ui.button("Add Folder Pattern (/**)").clicked() {
-                                self.app.add_folder_pattern();
-                                ui.close_menu();
-                            }
-                            if ui.button("Recursive Add Preview").clicked() {
-                                self.app.start_recursive_preview();
+                response.context_menu(|ui| {
+                    if file.is_dir {
+                        if ui.button("Open Folder").clicked() {
+                            self.app.enter_directory();
+                            ui.close_menu();
+                        }
+                        if ui.button("Add Folder Pattern (/**)").clicked() {
+                            self.app.add_folder_pattern();
+                            ui.close_menu();
+                        }
+                        if ui.button("Recursive Add Preview").clicked() {
+                            self.app.start_recursive_preview();
+                            ui.close_menu();
+                        }
+                    } else {
+                        if file.is_tracked {
+                            if ui.button("Remove from Tracking").clicked() {
+                                self.app.remove_from_tracking_in_browser();
                                 ui.close_menu();
                             }
                         } else {
-                            if file.is_tracked {
-                                if ui.button("Remove from Tracking").clicked() {
-                                    self.app.remove_from_tracking_in_browser();
-                                    ui.close_menu();
-                                }
-                            } else {
-                                if ui.button("Add to Tracking").clicked() {
-                                    self.app.toggle_tracking();
-                                    ui.close_menu();
-                                }
-                            }
-                            ui.separator();
-                            if ui.button("View File").clicked() {
-                                self.app.open_viewer();
+                            if ui.button("Add to Tracking").clicked() {
+                                self.app.toggle_tracking();
                                 ui.close_menu();
                             }
                         }
-                    });
+                        ui.separator();
+                        if ui.button("View File").clicked() {
+                            self.app.open_viewer();
+                            ui.close_menu();
+                        }
+                    }
+                });
             }
         }
     }
@@ -695,8 +711,11 @@ impl GuiApp {
                 }).collect();
 
                 let selected_idx = self.app.restore_list_state.selected();
-                let mut clicked_item: Option<usize> = None;
+
+                // Track which item was clicked/right-clicked
+                let mut new_selection: Option<usize> = None;
                 let mut double_clicked_item: Option<usize> = None;
+                let mut right_clicked_item: Option<(usize, egui::Response)> = None;
 
                 ScrollArea::vertical()
                     .id_salt("restore_commits_scroll")
@@ -708,62 +727,74 @@ impl GuiApp {
                                 Color32::TRANSPARENT
                             };
 
-                            let frame_response = egui::Frame::none()
-                                .fill(bg_color)
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        let marker = if *is_multi_selected { "*" } else { " " };
-                                        ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                            // Allocate space for the row and get a response for click detection
+                            let (row_rect, row_response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 20.0),
+                                egui::Sense::click(),
+                            );
 
-                                        ui.label(RichText::new(&commit.short_hash).color(Colors::YELLOW).monospace());
+                            // Draw background
+                            if *is_selected || row_response.hovered() {
+                                let color = if *is_selected { bg_color } else { Color32::from_rgb(45, 45, 55) };
+                                ui.painter().rect_filled(row_rect, 0.0, color);
+                            }
 
-                                        let date_short = if commit.date.len() > 19 {
-                                            &commit.date[..19]
-                                        } else {
-                                            &commit.date
-                                        };
-                                        ui.label(RichText::new(date_short).color(Colors::CYAN).monospace());
+                            // Draw the row content
+                            let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                            content_ui.set_clip_rect(row_rect);
 
-                                        let response = ui.add(
-                                            egui::Label::new(RichText::new(&commit.message).monospace())
-                                                .sense(egui::Sense::click())
-                                        );
-                                        if response.clicked() {
-                                            clicked_item = Some(*i);
-                                        }
-                                        if response.double_clicked() {
-                                            double_clicked_item = Some(*i);
-                                        }
-                                    });
-                                });
+                            let marker = if *is_multi_selected { "*" } else { " " };
+                            content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                            content_ui.label(RichText::new(&commit.short_hash).color(Colors::YELLOW).monospace());
+
+                            let date_short = if commit.date.len() > 19 {
+                                &commit.date[..19]
+                            } else {
+                                &commit.date
+                            };
+                            content_ui.label(RichText::new(date_short).color(Colors::CYAN).monospace());
+
+                            content_ui.label(RichText::new(&commit.message).monospace());
+
+                            // Handle clicks on this row
+                            if row_response.clicked() {
+                                new_selection = Some(*i);
+                            }
+                            if row_response.double_clicked() {
+                                double_clicked_item = Some(*i);
+                            }
+                            if row_response.secondary_clicked() {
+                                new_selection = Some(*i);
+                                right_clicked_item = Some((*i, row_response.clone()));
+                            }
 
                             // Scroll to selected item
                             if selected_idx == Some(*i) {
-                                frame_response.response.scroll_to_me(Some(egui::Align::Center));
+                                row_response.scroll_to_me(Some(egui::Align::Center));
                             }
                         }
                     });
+
+                // Apply selection change
+                if let Some(i) = new_selection {
+                    self.app.restore_list_state.select(Some(i));
+                }
 
                 // Handle double-click to select commit immediately
                 if let Some(i) = double_clicked_item {
                     self.app.restore_list_state.select(Some(i));
                     self.app.select_commit();
-                } else if let Some(i) = clicked_item {
-                    self.app.restore_list_state.select(Some(i));
                 }
 
-                // Context menu for commits
-                if let Some(i) = self.app.restore_list_state.selected() {
-                    if i < self.app.commits.len() {
-                        let id = egui::Id::new("restore_commits_context").with(i);
-                        ui.interact(ui.max_rect(), id, egui::Sense::click())
-                            .context_menu(|ui| {
-                                if ui.button("Select This Backup").clicked() {
-                                    self.app.select_commit();
-                                    ui.close_menu();
-                                }
-                            });
-                    }
+                // Show context menu for right-clicked item
+                if let Some((_i, response)) = right_clicked_item {
+                    response.context_menu(|ui| {
+                        if ui.button("Select This Backup").clicked() {
+                            self.app.select_commit();
+                            ui.close_menu();
+                        }
+                    });
                 }
             }
             RestoreView::Files => {
@@ -790,7 +821,10 @@ impl GuiApp {
                 }).collect();
 
                 let selected_idx = self.app.restore_list_state.selected();
-                let mut clicked_item: Option<usize> = None;
+
+                // Track which item was clicked/right-clicked
+                let mut new_selection: Option<usize> = None;
+                let mut right_clicked_item: Option<(usize, egui::Response)> = None;
 
                 ScrollArea::vertical()
                     .id_salt("restore_files_scroll")
@@ -802,67 +836,77 @@ impl GuiApp {
                                 Color32::TRANSPARENT
                             };
 
-                            let frame_response = egui::Frame::none()
-                                .fill(bg_color)
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        let marker = if *is_multi_selected { "*" } else { " " };
-                                        ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+                            // Allocate space for the row and get a response for click detection
+                            let (row_rect, row_response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 20.0),
+                                egui::Sense::click(),
+                            );
 
-                                        let (status, color) = if !file.exists_locally {
-                                            ("NEW", Colors::CYAN)
-                                        } else if file.local_differs {
-                                            ("CHG", Colors::YELLOW)
-                                        } else {
-                                            ("OK ", Colors::GREEN)
-                                        };
-                                        ui.label(RichText::new(status).color(color).monospace());
+                            // Draw background
+                            if *is_selected || row_response.hovered() {
+                                let color = if *is_selected { bg_color } else { Color32::from_rgb(45, 45, 55) };
+                                ui.painter().rect_filled(row_rect, 0.0, color);
+                            }
 
-                                        ui.label(RichText::new(format_size(file.size)).color(Colors::DARK_GRAY).monospace());
+                            // Draw the row content
+                            let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                            content_ui.set_clip_rect(row_rect);
 
-                                        let file_color = if file.local_differs { Colors::WHITE } else { Colors::DARK_GRAY };
-                                        let response = ui.add(
-                                            egui::Label::new(RichText::new(&file.display_path).color(file_color).monospace())
-                                                .sense(egui::Sense::click())
-                                        );
-                                        if response.clicked() {
-                                            clicked_item = Some(*i);
-                                        }
-                                    });
-                                });
+                            let marker = if *is_multi_selected { "*" } else { " " };
+                            content_ui.label(RichText::new(marker).color(Colors::CYAN).monospace());
+
+                            let (status, color) = if !file.exists_locally {
+                                ("NEW", Colors::CYAN)
+                            } else if file.local_differs {
+                                ("CHG", Colors::YELLOW)
+                            } else {
+                                ("OK ", Colors::GREEN)
+                            };
+                            content_ui.label(RichText::new(status).color(color).monospace());
+
+                            content_ui.label(RichText::new(format_size(file.size)).color(Colors::DARK_GRAY).monospace());
+
+                            let file_color = if file.local_differs { Colors::WHITE } else { Colors::DARK_GRAY };
+                            content_ui.label(RichText::new(&file.display_path).color(file_color).monospace());
+
+                            // Handle clicks on this row
+                            if row_response.clicked() {
+                                new_selection = Some(*i);
+                            }
+                            if row_response.secondary_clicked() {
+                                new_selection = Some(*i);
+                                right_clicked_item = Some((*i, row_response.clone()));
+                            }
 
                             // Scroll to selected item
                             if selected_idx == Some(*i) {
-                                frame_response.response.scroll_to_me(Some(egui::Align::Center));
+                                row_response.scroll_to_me(Some(egui::Align::Center));
                             }
                         }
                     });
 
-                if let Some(i) = clicked_item {
+                // Apply selection change
+                if let Some(i) = new_selection {
                     self.app.restore_list_state.select(Some(i));
                 }
 
-                // Context menu for restore files
-                if let Some(i) = self.app.restore_list_state.selected() {
-                    if i < self.app.restore_files.len() {
-                        let id = egui::Id::new("restore_files_context").with(i);
-                        ui.interact(ui.max_rect(), id, egui::Sense::click())
-                            .context_menu(|ui| {
-                                if ui.button("Restore File").clicked() {
-                                    self.app.perform_restore();
-                                    ui.close_menu();
-                                }
-                                if ui.button("View File").clicked() {
-                                    self.app.open_viewer();
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button("Back to Backups").clicked() {
-                                    self.app.back_to_commits();
-                                    ui.close_menu();
-                                }
-                            });
-                    }
+                // Show context menu for right-clicked item
+                if let Some((_i, response)) = right_clicked_item {
+                    response.context_menu(|ui| {
+                        if ui.button("Restore File").clicked() {
+                            self.app.perform_restore();
+                            ui.close_menu();
+                        }
+                        if ui.button("View File").clicked() {
+                            self.app.open_viewer();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Back to Backups").clicked() {
+                            self.app.back_to_commits();
+                            ui.close_menu();
+                        }
+                    });
                 }
             }
         }
