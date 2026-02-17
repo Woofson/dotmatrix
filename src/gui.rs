@@ -385,7 +385,11 @@ impl GuiApp {
                     }
 
                     // Draw the row content
-                    let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                    let mut content_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center))
+                    );
                     content_ui.set_clip_rect(row_rect);
 
                     // Selection marker
@@ -587,7 +591,11 @@ impl GuiApp {
                     }
 
                     // Draw the row content
-                    let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                    let mut content_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center))
+                    );
                     content_ui.set_clip_rect(row_rect);
 
                     let marker = if *is_multi_selected { "*" } else { " " };
@@ -740,7 +748,11 @@ impl GuiApp {
                             }
 
                             // Draw the row content
-                            let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                            let mut content_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(row_rect)
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center))
+                            );
                             content_ui.set_clip_rect(row_rect);
 
                             let marker = if *is_multi_selected { "*" } else { " " };
@@ -849,7 +861,11 @@ impl GuiApp {
                             }
 
                             // Draw the row content
-                            let mut content_ui = ui.child_ui(row_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                            let mut content_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(row_rect)
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center))
+                            );
                             content_ui.set_clip_rect(row_rect);
 
                             let marker = if *is_multi_selected { "*" } else { " " };
