@@ -1790,12 +1790,38 @@ impl App {
             format!("Backup {}", timestamp)
         });
 
-        // Get current executable path to run backup command
+        // Get dotmatrix executable path to run backup command
+        // Note: We need "dotmatrix" not "dmgui" since dmgui doesn't have CLI commands
         let exe_path = match std::env::current_exe() {
-            Ok(path) => path,
-            Err(e) => {
-                self.message = Some(format!("Cannot find executable: {}", e));
-                return;
+            Ok(current) => {
+                // Get directory containing current executable
+                if let Some(dir) = current.parent() {
+                    #[cfg(windows)]
+                    let dotmatrix_exe = dir.join("dotmatrix.exe");
+                    #[cfg(not(windows))]
+                    let dotmatrix_exe = dir.join("dotmatrix");
+
+                    if dotmatrix_exe.exists() {
+                        dotmatrix_exe
+                    } else {
+                        // Fall back to hoping it's in PATH
+                        #[cfg(windows)]
+                        { std::path::PathBuf::from("dotmatrix.exe") }
+                        #[cfg(not(windows))]
+                        { std::path::PathBuf::from("dotmatrix") }
+                    }
+                } else {
+                    #[cfg(windows)]
+                    { std::path::PathBuf::from("dotmatrix.exe") }
+                    #[cfg(not(windows))]
+                    { std::path::PathBuf::from("dotmatrix") }
+                }
+            }
+            Err(_) => {
+                #[cfg(windows)]
+                { std::path::PathBuf::from("dotmatrix.exe") }
+                #[cfg(not(windows))]
+                { std::path::PathBuf::from("dotmatrix") }
             }
         };
 
