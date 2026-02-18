@@ -115,6 +115,7 @@ linux_release: release
 	@cp README.md CHANGELOG.md LICENSE release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cp example-config.toml release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cp dotmatrix.desktop release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp assets/dotmatrix-icon.svg assets/dotmatrix-icon-256.png release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cd release && tar -czvf dotmatrix-$(VERSION)-linux-x86_64.tar.gz dotmatrix-$(VERSION)-linux-x86_64/
 	@echo "   ✓ Tarball: release/dotmatrix-$(VERSION)-linux-x86_64.tar.gz"
 
@@ -122,7 +123,7 @@ linux_release: release
 	@echo ""
 	@echo "  release/dotmatrix-$(VERSION)-linux-x86_64.tar.gz"
 	@echo ""
-	@echo "  Includes: dotmatrix + dmgui + dotmatrix.desktop"
+	@echo "  Includes: dotmatrix + dmgui + dotmatrix.desktop + icon"
 
 # Show help
 help:

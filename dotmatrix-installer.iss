@@ -37,6 +37,7 @@ LZMAUseSeparateProcess=yes
 
 ; Appearance
 WizardStyle=modern
+SetupIconFile=assets\dotmatrix-icon.ico
 
 ; Minimum Windows version: Windows 10
 MinVersion=10.0
@@ -46,7 +47,7 @@ PrivilegesRequired=admin
 
 ; Uninstaller
 UninstallDisplayName={#AppName}
-UninstallDisplayIcon={app}\{#AppExeName}
+UninstallDisplayIcon={app}\dotmatrix-icon.ico
 
 ; Code signing - uncomment and fill in if you have a certificate
 ; SignTool=signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f "path\to\cert.pfx" /p "password" $f
@@ -79,6 +80,11 @@ Source: "example-config.toml"; \
   DestDir: "{app}"; \
   Flags: ignoreversion
 
+; Icon
+Source: "assets\dotmatrix-icon.ico"; \
+  DestDir: "{app}"; \
+  Flags: ignoreversion
+
 ; Docs
 Source: "README.md"; \
   DestDir: "{app}"; \
@@ -97,17 +103,20 @@ Source: "LICENSE"; \
 ; Start Menu shortcut for GUI (uses dmgui.exe - no console window)
 Name: "{group}\Dot Matrix"; \
   Filename: "{app}\{#AppGuiExeName}"; \
+  IconFilename: "{app}\dotmatrix-icon.ico"; \
   Comment: "Dotfile backup and versioning"
 
 ; Desktop shortcut (optional, uses dmgui.exe)
 Name: "{commondesktop}\Dot Matrix"; \
   Filename: "{app}\{#AppGuiExeName}"; \
+  IconFilename: "{app}\dotmatrix-icon.ico"; \
   Tasks: desktopicon
 
 ; Start Menu shortcut for command line
 Name: "{group}\Dot Matrix (Command Line)"; \
   Filename: "{cmd}"; \
   Parameters: "/k ""{app}\{#AppExeName}"" --help"; \
+  IconFilename: "{app}\dotmatrix-icon.ico"; \
   Comment: "Open terminal with dotmatrix"
 
 

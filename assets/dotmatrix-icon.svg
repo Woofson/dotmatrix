@@ -1,0 +1,223 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bgGrad" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1a1410"/>
+      <stop offset="100%" stop-color="#0a0806"/>
+    </radialGradient>
+    <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff8c00" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#e05c00" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#8b2500" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Rounded square clip -->
+    <clipPath id="roundedClip">
+      <rect x="0" y="0" width="512" height="512" rx="96" ry="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <g clip-path="url(#roundedClip)">
+    <rect width="512" height="512" fill="url(#bgGrad)"/>
+    
+    <!-- Subtle scanline texture -->
+    <rect width="512" height="512" fill="url(#bgGrad)" opacity="0.4"/>
+    
+    <!-- Subtle grid lines in background -->
+    <g opacity="0.06" stroke="#ff6a00" stroke-width="0.5">
+      <!-- Vertical lines -->
+      <line x1="64" y1="0" x2="64" y2="512"/>
+      <line x1="128" y1="0" x2="128" y2="512"/>
+      <line x1="192" y1="0" x2="192" y2="512"/>
+      <line x1="256" y1="0" x2="256" y2="512"/>
+      <line x1="320" y1="0" x2="320" y2="512"/>
+      <line x1="384" y1="0" x2="384" y2="512"/>
+      <line x1="448" y1="0" x2="448" y2="512"/>
+      <!-- Horizontal lines -->
+      <line x1="0" y1="64" x2="512" y2="64"/>
+      <line x1="0" y1="128" x2="512" y2="128"/>
+      <line x1="0" y1="192" x2="512" y2="192"/>
+      <line x1="0" y1="256" x2="512" y2="256"/>
+      <line x1="0" y1="320" x2="512" y2="320"/>
+      <line x1="0" y1="384" x2="512" y2="384"/>
+      <line x1="0" y1="448" x2="512" y2="448"/>
+    </g>
+
+    <!-- 
+      Dot matrix pattern spelling "DM" or forming a bracket/folder shape
+      using a 9x7 dot grid centered in the icon
+      
+      We'll render a dot-matrix style symbol: an open bracket { with dots,
+      representing configuration files / dotfiles in terminal.
+      
+      Actually let's do a more iconic approach: 
+      a 7-column x 9-row dot grid that forms ".dm" or a specific pattern.
+      
+      Let's spell out a dot "•" (period) + stylized D shape in dot matrix style.
+      
+      Grid: 13 cols x 9 rows, spacing 28px, starting at x=100, y=142
+      Each dot is a circle r=7
+    -->
+
+    <!-- 
+      Dot matrix bitmap for a period + D
+      Using 0=dim dot, 1=bright dot
+      
+      Period (col 0-1): 
+      Row 0-6: off
+      Row 7-8: col0 on
+      
+      D shape (col 3-9):
+      Col 3: all on rows 0-8
+      Col 4: on rows 0, 4, 8
+      Col 5: on rows 1, 3, 5, 7
+      Col 6: on rows 1, 3, 5, 7
+      Col 7: on rows 2, 6
+      Col 8: on rows 2, 6
+      
+      Let me just hand-craft a nice ".D" in 5x7 dot matrix font style:
+    -->
+
+    <!-- 
+      Full dot matrix grid background (dim dots) - 13x9 grid
+      x start=94, y start=142, spacing=26
+    -->
+    <g filter="url(#glow)">
+      
+    <!-- DIM BACKGROUND DOTS (the "off" dots of the display) -->
+    <!-- We'll place dim dots across the whole grid area -->
+    <g opacity="0.18" fill="#ff6a00">
+      <!-- Row 0 (y=148) -->
+      <circle cx="120" cy="148" r="5.5"/><circle cx="150" cy="148" r="5.5"/><circle cx="180" cy="148" r="5.5"/><circle cx="210" cy="148" r="5.5"/><circle cx="240" cy="148" r="5.5"/><circle cx="270" cy="148" r="5.5"/><circle cx="300" cy="148" r="5.5"/><circle cx="330" cy="148" r="5.5"/><circle cx="360" cy="148" r="5.5"/><circle cx="390" cy="148" r="5.5"/>
+      <!-- Row 1 (y=178) -->
+      <circle cx="120" cy="178" r="5.5"/><circle cx="150" cy="178" r="5.5"/><circle cx="180" cy="178" r="5.5"/><circle cx="210" cy="178" r="5.5"/><circle cx="240" cy="178" r="5.5"/><circle cx="270" cy="178" r="5.5"/><circle cx="300" cy="178" r="5.5"/><circle cx="330" cy="178" r="5.5"/><circle cx="360" cy="178" r="5.5"/><circle cx="390" cy="178" r="5.5"/>
+      <!-- Row 2 (y=208) -->
+      <circle cx="120" cy="208" r="5.5"/><circle cx="150" cy="208" r="5.5"/><circle cx="180" cy="208" r="5.5"/><circle cx="210" cy="208" r="5.5"/><circle cx="240" cy="208" r="5.5"/><circle cx="270" cy="208" r="5.5"/><circle cx="300" cy="208" r="5.5"/><circle cx="330" cy="208" r="5.5"/><circle cx="360" cy="208" r="5.5"/><circle cx="390" cy="208" r="5.5"/>
+      <!-- Row 3 (y=238) -->
+      <circle cx="120" cy="238" r="5.5"/><circle cx="150" cy="238" r="5.5"/><circle cx="180" cy="238" r="5.5"/><circle cx="210" cy="238" r="5.5"/><circle cx="240" cy="238" r="5.5"/><circle cx="270" cy="238" r="5.5"/><circle cx="300" cy="238" r="5.5"/><circle cx="330" cy="238" r="5.5"/><circle cx="360" cy="238" r="5.5"/><circle cx="390" cy="238" r="5.5"/>
+      <!-- Row 4 (y=268) -->
+      <circle cx="120" cy="268" r="5.5"/><circle cx="150" cy="268" r="5.5"/><circle cx="180" cy="268" r="5.5"/><circle cx="210" cy="268" r="5.5"/><circle cx="240" cy="268" r="5.5"/><circle cx="270" cy="268" r="5.5"/><circle cx="300" cy="268" r="5.5"/><circle cx="330" cy="268" r="5.5"/><circle cx="360" cy="268" r="5.5"/><circle cx="390" cy="268" r="5.5"/>
+      <!-- Row 5 (y=298) -->
+      <circle cx="120" cy="298" r="5.5"/><circle cx="150" cy="298" r="5.5"/><circle cx="180" cy="298" r="5.5"/><circle cx="210" cy="298" r="5.5"/><circle cx="240" cy="298" r="5.5"/><circle cx="270" cy="298" r="5.5"/><circle cx="300" cy="298" r="5.5"/><circle cx="330" cy="298" r="5.5"/><circle cx="360" cy="298" r="5.5"/><circle cx="390" cy="298" r="5.5"/>
+      <!-- Row 6 (y=328) -->
+      <circle cx="120" cy="328" r="5.5"/><circle cx="150" cy="328" r="5.5"/><circle cx="180" cy="328" r="5.5"/><circle cx="210" cy="328" r="5.5"/><circle cx="240" cy="328" r="5.5"/><circle cx="270" cy="328" r="5.5"/><circle cx="300" cy="328" r="5.5"/><circle cx="330" cy="328" r="5.5"/><circle cx="360" cy="328" r="5.5"/><circle cx="390" cy="328" r="5.5"/>
+      <!-- Row 7 (y=358) -->
+      <circle cx="120" cy="358" r="5.5"/><circle cx="150" cy="358" r="5.5"/><circle cx="180" cy="358" r="5.5"/><circle cx="210" cy="358" r="5.5"/><circle cx="240" cy="358" r="5.5"/><circle cx="270" cy="358" r="5.5"/><circle cx="300" cy="358" r="5.5"/><circle cx="330" cy="358" r="5.5"/><circle cx="360" cy="358" r="5.5"/><circle cx="390" cy="358" r="5.5"/>
+      <!-- Row 8 (y=388) -->
+      <circle cx="120" cy="388" r="5.5"/><circle cx="150" cy="388" r="5.5"/><circle cx="180" cy="388" r="5.5"/><circle cx="210" cy="388" r="5.5"/><circle cx="240" cy="388" r="5.5"/><circle cx="270" cy="388" r="5.5"/><circle cx="300" cy="388" r="5.5"/><circle cx="330" cy="388" r="5.5"/><circle cx="360" cy="388" r="5.5"/><circle cx="390" cy="388" r="5.5"/>
+    </g>
+
+    <!-- BRIGHT ACTIVE DOTS spelling ".D" in 5x9 dot-matrix bitmap
+    
+    "." glyph (1 col wide, dot at rows 7-8):
+    col x=120: rows 358, 388
+    
+    gap at col x=150
+    
+    "D" glyph (5 cols, rows 0-8):
+    Using classic 5x9 dot matrix D:
+    Col 0 (x=180): all 9 rows on
+    Col 1 (x=210): row0, row4(mid), row8 on
+    Col 2 (x=240): row1, row7 on  
+    Col 3 (x=270): row2, row6 on
+    Col 4 (x=300): row3, row5 on
+    ... this makes a D shape
+    
+    Actually let me design a clean D:
+    Left vertical bar: x=210, all rows 148-388
+    Top horizontal: row 148, x=210-300
+    Bottom horizontal: row 388, x=210-300
+    Right curve dots:
+      x=330 rows 178, 358
+      x=360 rows 208, 328
+      x=390 rows 238, 268, 298 (middle fill)
+      
+    Wait, for a dot-matrix D on a 5-col grid (x=210 to 330, step 30):
+    Col x=210: rows 148,178,208,238,268,298,328,358,388 (full left bar)
+    Col x=240: rows 148, 388 (top and bottom)
+    Col x=270: rows 148, 388 (slightly out)
+    Col x=300: rows 178, 358 (curve top/bottom)
+    Col x=330: rows 208, 238, 268, 298, 328 (right curve)
+    
+    -->
+    <g filter="url(#softGlow)" fill="#ff8c00">
+      <!-- Period dots -->
+      <circle cx="120" cy="358" r="9"/>
+      <circle cx="120" cy="388" r="9"/>
+
+      <!-- D glyph - left vertical bar (x=210) -->
+      <circle cx="210" cy="148" r="9"/>
+      <circle cx="210" cy="178" r="9"/>
+      <circle cx="210" cy="208" r="9"/>
+      <circle cx="210" cy="238" r="9"/>
+      <circle cx="210" cy="268" r="9"/>
+      <circle cx="210" cy="298" r="9"/>
+      <circle cx="210" cy="328" r="9"/>
+      <circle cx="210" cy="358" r="9"/>
+      <circle cx="210" cy="388" r="9"/>
+
+      <!-- D glyph - top row -->
+      <circle cx="240" cy="148" r="9"/>
+      <circle cx="270" cy="148" r="9"/>
+      <circle cx="300" cy="148" r="9"/>
+
+      <!-- D glyph - bottom row -->
+      <circle cx="240" cy="388" r="9"/>
+      <circle cx="270" cy="388" r="9"/>
+      <circle cx="300" cy="388" r="9"/>
+
+      <!-- D glyph - right curve -->
+      <circle cx="330" cy="178" r="9"/>
+      <circle cx="360" cy="208" r="9"/>
+      <circle cx="390" cy="238" r="9"/>
+      <circle cx="390" cy="268" r="9"/>
+      <circle cx="390" cy="298" r="9"/>
+      <circle cx="360" cy="328" r="9"/>
+      <circle cx="330" cy="358" r="9"/>
+    </g>
+
+    </g>
+
+    <!-- Amber glow bloom behind the active dots -->
+    <ellipse cx="260" cy="268" rx="190" ry="160" fill="#ff6a00" opacity="0.04"/>
+
+    <!-- Bottom "dotmatrix" wordmark in tiny dot-matrix-style text -->
+    <text x="256" y="462" 
+          font-family="'Courier New', Courier, monospace" 
+          font-size="22" 
+          font-weight="bold"
+          letter-spacing="6"
+          text-anchor="middle" 
+          fill="#ff8c00" 
+          opacity="0.7">dotmatrix</text>
+    
+    <!-- Tiny version hint line -->
+    <line x1="96" y1="430" x2="416" y2="430" stroke="#ff6a00" stroke-width="0.75" opacity="0.25"/>
+
+    <!-- Corner bracket decorations (terminal aesthetic) -->
+    <g stroke="#ff6a00" stroke-width="2" fill="none" opacity="0.35">
+      <!-- Top left -->
+      <polyline points="56,88 56,56 88,56"/>
+      <!-- Top right -->
+      <polyline points="424,56 456,56 456,88"/>
+      <!-- Bottom left -->
+      <polyline points="56,424 56,456 88,456"/>
+      <!-- Bottom right -->
+      <polyline points="424,456 456,456 456,424"/>
+    </g>
+
+  </g>
+</svg>
