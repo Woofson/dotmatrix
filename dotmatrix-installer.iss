@@ -3,10 +3,11 @@
 ; Requires Inno Setup 6.x
 
 #define AppName "dotmatrix"
-#define AppVersion "0.4.0"
+#define AppVersion "0.4.1"
 #define AppPublisher "Woofson"
 #define AppURL "https://github.com/Woofson/dotmatrix"
 #define AppExeName "dotmatrix.exe"
+#define AppGuiExeName "dmgui.exe"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -63,8 +64,18 @@ Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "
 
 
 [Files]
-; Main executable
+; Main executable (CLI/TUI/GUI with console)
 Source: "target\release\{#AppExeName}"; \
+  DestDir: "{app}"; \
+  Flags: ignoreversion
+
+; GUI-only executable (no console window)
+Source: "target\release\{#AppGuiExeName}"; \
+  DestDir: "{app}"; \
+  Flags: ignoreversion
+
+; Example config
+Source: "example-config.toml"; \
   DestDir: "{app}"; \
   Flags: ignoreversion
 
@@ -83,17 +94,21 @@ Source: "LICENSE"; \
 
 
 [Icons]
-; Start Menu shortcut for GUI mode
+; Start Menu shortcut for GUI (uses dmgui.exe - no console window)
 Name: "{group}\Dot Matrix"; \
-  Filename: "{app}\{#AppExeName}"; \
-  Parameters: "gui"; \
+  Filename: "{app}\{#AppGuiExeName}"; \
   Comment: "Dotfile backup and versioning"
 
-; Desktop shortcut (optional)
+; Desktop shortcut (optional, uses dmgui.exe)
 Name: "{commondesktop}\Dot Matrix"; \
-  Filename: "{app}\{#AppExeName}"; \
-  Parameters: "gui"; \
+  Filename: "{app}\{#AppGuiExeName}"; \
   Tasks: desktopicon
+
+; Start Menu shortcut for command line
+Name: "{group}\Dot Matrix (Command Line)"; \
+  Filename: "{cmd}"; \
+  Parameters: "/k ""{app}\{#AppExeName}"" --help"; \
+  Comment: "Open terminal with dotmatrix"
 
 
 [Registry]
