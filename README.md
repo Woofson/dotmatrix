@@ -194,7 +194,7 @@ dotmatrix tui
 |-----|--------|
 | `j/k`, arrows | Navigate |
 | `Tab` | Next tab |
-| `v` | View file contents (syntax highlighted) |
+| `v` | View file or folder contents (syntax highlighted) |
 | `b` | Run backup (Tracked Files tab) |
 | `Right/l` | Expand folder / Enter directory |
 | `Left/h` | Collapse folder / Parent directory |
@@ -205,6 +205,15 @@ dotmatrix tui
 | `d` | Stop tracking file |
 | `?` | Help |
 | `q` | Quit (saves changes) |
+
+**Folder viewing (conf.d support):**
+
+Press `v` on a folder to view all files inside as a single concatenated view. Perfect for `conf.d` style directories where configuration is split across multiple files:
+
+- Files are sorted by numeric prefix first (`00-base.conf`, `10-network.conf`, `99-local.conf`)
+- Each file gets a header separator with its filename
+- Syntax highlighting applied to each file
+- Scroll through all configs in one view
 
 **Status symbols** (Tracked Files tab):
 - ` ` (space) = Backed up and unchanged
