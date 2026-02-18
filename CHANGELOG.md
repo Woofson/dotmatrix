@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-02-18
+
+### GUI Improvements
+- **Added:** GUI-only binary (`dmgui` / `dmgui.exe`) - no console window on Windows
+- **Added:** Burger menu (☰) with quick access to config file, backup folder, and quit
+- **Added:** Mouse cursor changes to pointer when hovering tabs
+- **Fixed:** Right-click context menus now work properly on all list views
+- **Fixed:** Mouse scroll works smoothly without bouncing
+- **Fixed:** Mouse clicks work anywhere on rows, not just on text
+
+### TUI Improvements
+- **Changed:** Status bar now shows "Dot Matrix v0.4.1" as title
+
+### New Files
+- `dmgui.rs` - GUI-only entry point for Windows console-free mode
+- `example-config.toml` - Documented configuration reference
+- `dotmatrix.desktop` - Linux desktop integration file
+
+### Configuration
+- **Added:** `archive_format` option: `targz`, `zip`, or `sevenzip`
+- **Added:** App identifier `ac.arf.dev.dotmatrix` for desktop integration
+
+### Build & Release
+- **Added:** `make linux_release` target for creating Linux tarballs
+- **Updated:** Windows installer includes `dmgui.exe` and uses it for shortcuts
+- **Updated:** Release packages include `example-config.toml`
+
+## [0.4.0] - 2026-02-17
+
+### GUI
+- **Added:** Native GUI using egui/eframe (`dotmatrix gui`)
+- **Added:** Same three-tab layout as TUI (Tracked Files, Add Files, Restore)
+- **Added:** Full mouse support with click, double-click, and context menus
+- **Added:** Syntax-highlighted file viewer
+- **Added:** Keyboard shortcuts similar to TUI
+
+### Configuration
+- **Added:** `preferred_interface` option: `auto`, `gui`, or `tui`
+- **Added:** Platform-aware defaults (GUI on Windows, TUI on Linux/macOS)
+
 ## [0.3.6] - 2026-02-16
 
 ### Fixed
