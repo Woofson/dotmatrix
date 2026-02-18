@@ -14,11 +14,12 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 - **Git-based versioning**: Full history of your dotfiles with commit messages
 - **Pattern matching**: Track entire directories or specific file patterns
 - **Exclude lists**: Ignore temporary files, logs, and other cruft
-- **Two backup modes**: Incremental (content-addressed) or archive (tarballs)
+- **Two backup modes**: Incremental (content-addressed) or archive (tar.gz/zip/7z)
 - **Per-pattern modes**: Override backup mode for specific files/directories
 - **Safety-first restore**: Comparison view, diffs, and automatic safety backups
 - **Path remapping**: Restore to different locations for distro-hopping
 - **Interactive TUI**: Browse, backup, and restore with keyboard navigation
+- **Native GUI**: Modern graphical interface with mouse support
 - **CLI first**: Power user friendly with clean command structure
 
 ## Installation
@@ -33,6 +34,14 @@ Or with cargo directly:
 
 ```bash
 cargo install --path .
+```
+
+### Linux Desktop Integration
+
+To add Dot Matrix to your application menu:
+
+```bash
+cp dotmatrix.desktop ~/.local/share/applications/
 ```
 
 ## Quick Start
@@ -55,11 +64,20 @@ dotmatrix status
 
 # Restore from backup (with safety prompts)
 dotmatrix restore
+
+# Launch interactive interfaces
+dotmatrix tui    # Terminal UI
+dotmatrix gui    # Graphical UI
+dotmatrix        # Auto-select based on platform/config
 ```
+
+### Windows GUI-Only Mode
+
+On Windows, use `dmgui.exe` for a console-free GUI experience (no terminal window).
 
 ## Configuration
 
-Edit `~/.config/dotmatrix/config.toml`:
+Edit `~/.config/dotmatrix/config.toml` (see `example-config.toml` for a complete reference):
 
 ```toml
 # Optional: Custom backup location (defaults to system data directory)
@@ -67,7 +85,14 @@ Edit `~/.config/dotmatrix/config.toml`:
 # data_dir = "D:/Backups/dotmatrix"  # Windows example
 
 git_enabled = true
-backup_mode = "incremental"  # default mode: "incremental" or "archive"
+backup_mode = "incremental"  # "incremental" or "archive"
+archive_format = "targz"     # "targz", "zip", or "sevenzip"
+
+# Interface preference when running without arguments
+# "auto" = GUI on Windows, TUI on Linux/macOS
+# "gui" = Always use GUI
+# "tui" = Always use TUI
+preferred_interface = "auto"
 
 tracked_files = [
     "~/.bashrc",
@@ -88,7 +113,14 @@ exclude = [
 ### Backup Modes
 
 - **incremental**: Content-addressed storage with automatic deduplication. Best for frequent backups.
-- **archive**: Compressed tarballs with timestamps. Best for occasional snapshots.
+- **archive**: Compressed archives with timestamps. Best for occasional snapshots.
+
+### Archive Formats
+
+When using archive mode:
+- **targz**: tar.gz (default on Linux/macOS)
+- **zip**: ZIP archive (default on Windows, good compatibility)
+- **sevenzip**: 7z archive (best compression)
 
 Patterns can override the default mode by using the object syntax with `path` and `mode` fields.
 
@@ -113,6 +145,7 @@ Patterns can override the default mode by using the object syntax with `path` an
 | `status` | Show changes since last backup |
 | `list` | List tracked patterns |
 | `tui` | Launch interactive TUI |
+| `gui` | Launch graphical interface |
 
 ### Global Flags
 
@@ -183,6 +216,34 @@ dotmatrix tui
 - `NEW` = File missing locally
 - `CHG` = Local file differs from backup
 - `OK` = Matches backup
+
+### GUI Mode
+
+Launch the graphical interface:
+
+```bash
+dotmatrix gui
+```
+
+Or use the GUI-only binary on Windows (`dmgui.exe`) for a console-free experience.
+
+**Features:**
+- Same three-tab layout as TUI (Tracked Files, Add Files, Restore)
+- Full mouse support with click, double-click, and right-click context menus
+- Keyboard shortcuts similar to TUI
+- Burger menu (☰) for quick access to config file, backup folder, and quit
+- Syntax-highlighted file viewer
+
+**Key bindings:**
+| Key | Action |
+|-----|--------|
+| `Ctrl+Q` | Quit |
+| `Escape` | Close dialog / Go back |
+| `Tab` | Next tab |
+| `1/2/3` | Switch to tab |
+| `v` | View file |
+| `b` | Backup |
+| `?` | Help |
 
 ## Directory Structure
 

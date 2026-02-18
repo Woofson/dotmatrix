@@ -291,6 +291,11 @@ impl GuiApp {
     }
 
     fn render_tabs(&mut self, ui: &mut egui::Ui) {
+        // Track actions for burger menu (to avoid borrow issues)
+        let mut action_open_config = false;
+        let mut action_open_folder = false;
+        let mut action_quit = false;
+
         ui.horizontal(|ui| {
             for (i, title) in TuiMode::titles().iter().enumerate() {
                 let is_selected = self.app.mode.index() == i;
@@ -315,7 +320,7 @@ impl GuiApp {
                     se: 0.0,
                 };
 
-                egui::Frame::none()
+                let frame_response = egui::Frame::none()
                     .fill(bg_color)
                     .rounding(rounding)
                     .inner_margin(egui::Margin::symmetric(16.0, 8.0))
@@ -337,9 +342,59 @@ impl GuiApp {
                         }
                     });
 
+                // Change cursor to pointer when hovering tabs
+                if frame_response.response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+
                 ui.add_space(2.0);
             }
+
+            // Push the burger menu to the right
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Burger menu button
+                let burger_response = ui.add(
+                    egui::Button::new(RichText::new("☰").size(18.0).color(Colors::DARK_GRAY))
+                        .frame(false)
+                );
+
+                if burger_response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+
+                burger_response.context_menu(|ui| {
+                    if ui.button("📁 Open Config File").clicked() {
+                        action_open_config = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("📂 Open Backup Folder").clicked() {
+                        action_open_folder = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("🚪 Quit").clicked() {
+                        action_quit = true;
+                        ui.close_menu();
+                    }
+                });
+
+                // Also show menu on left click
+                if burger_response.clicked() {
+                    ui.memory_mut(|mem| mem.toggle_popup(burger_response.id));
+                }
+            });
         });
+
+        // Handle burger menu actions
+        if action_open_config {
+            let _ = open::that(&self.app.config_path);
+        }
+        if action_open_folder {
+            let _ = open::that(&self.app.data_dir);
+        }
+        if action_quit {
+            self.app.should_quit = true;
+        }
     }
 
     fn render_status_tab(&mut self, ui: &mut egui::Ui) {
@@ -1466,7 +1521,8 @@ pub fn run(config: Config, index: Index, config_path: PathBuf, index_path: PathB
         viewport: egui::ViewportBuilder::default()
             .with_title("Dot Matrix")
             .with_inner_size([1000.0, 700.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_min_inner_size([600.0, 400.0])
+            .with_app_id("ac.arf.dev.dotmatrix"),
         ..Default::default()
     };
 

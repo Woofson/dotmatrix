@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Dot Matrix
+Comment=Dotfile management and versioning tool
+Exec=dotmatrix gui
+Icon=dotmatrix
+Terminal=false
+Categories=Utility;System;
+Keywords=dotfiles;backup;config;versioning;
+StartupWMClass=ac.arf.dev.dotmatrix

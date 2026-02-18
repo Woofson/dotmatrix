@@ -1,0 +1,70 @@
+# Dot Matrix - Example Configuration File
+# Copy this file to your config directory:
+#   Linux/macOS: ~/.config/dotmatrix/config.toml
+#   Windows: %APPDATA%\dotmatrix\config.toml
+#
+# Or run 'dotmatrix init' to generate a default config.
+
+# Custom data directory (optional)
+# If not set, uses system default:
+#   Linux: ~/.local/share/dotmatrix
+#   Windows: C:\Users\<User>\Documents\dotmatrix
+#   macOS: ~/Library/Application Support/dotmatrix
+# data_dir = "~/my-dotfiles-backup"
+
+# Enable git versioning for backups (recommended)
+git_enabled = true
+
+# Backup mode: "incremental" or "archive"
+#   incremental = Content-addressed storage (deduplication, git-versioned)
+#   archive = Create timestamped archives (tar.gz, zip, or 7z)
+backup_mode = "incremental"
+
+# Archive format (only used when backup_mode = "archive")
+#   "targz" = tar.gz (default on Linux/macOS)
+#   "zip" = ZIP archive (default on Windows)
+#   "sevenzip" = 7z archive
+archive_format = "targz"
+
+# Preferred interface when running without arguments
+#   "auto" = Platform default (GUI on Windows, TUI on Linux/macOS)
+#   "gui" = Always use GUI
+#   "tui" = Always use TUI
+preferred_interface = "auto"
+
+# Files and patterns to track
+# Use ~ for home directory (works on all platforms)
+# Supports glob patterns: *, **, ?
+tracked_files = [
+    # Shell configs
+    "~/.bashrc",
+    "~/.zshrc",
+    "~/.profile",
+
+    # Git config
+    "~/.gitconfig",
+
+    # SSH config (be careful with private keys!)
+    "~/.ssh/config",
+
+    # Editor configs
+    "~/.vimrc",
+    "~/.config/nvim/**",
+
+    # Other configs
+    "~/.config/dotmatrix/*",
+
+    # Per-pattern backup mode (overrides global setting)
+    # { path = "~/.config/large-app/**", mode = "archive" },
+]
+
+# Patterns to exclude from tracking
+exclude = [
+    "**/*.log",
+    "**/.DS_Store",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/Thumbs.db",
+]

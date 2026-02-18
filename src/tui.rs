@@ -1242,7 +1242,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
 
     let version = env!("CARGO_PKG_VERSION");
     let status_bar = Paragraph::new(status)
-        .block(Block::default().borders(Borders::ALL).title(format!(" v{} ", version)))
+        .block(Block::default().borders(Borders::ALL).title(format!(" Dot Matrix v{} ", version)))
         .style(style);
 
     f.render_widget(status_bar, area);
