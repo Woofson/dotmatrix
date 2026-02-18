@@ -353,6 +353,7 @@ impl GuiApp {
             // Push the burger menu to the right
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Burger menu button
+                let burger_id = ui.make_persistent_id("burger_menu");
                 let burger_response = ui.add(
                     egui::Button::new(RichText::new("☰").size(18.0).color(Colors::DARK_GRAY))
                         .frame(false)
@@ -362,26 +363,28 @@ impl GuiApp {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
-                burger_response.context_menu(|ui| {
+                // Open menu on left click
+                if burger_response.clicked() {
+                    ui.memory_mut(|mem| mem.toggle_popup(burger_id));
+                }
+
+                // Show popup menu below the button
+                egui::popup_below_widget(ui, burger_id, &burger_response, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    ui.set_min_width(180.0);
                     if ui.button("📁 Open Config File").clicked() {
                         action_open_config = true;
-                        ui.close_menu();
+                        ui.memory_mut(|mem| mem.close_popup());
                     }
                     if ui.button("📂 Open Backup Folder").clicked() {
                         action_open_folder = true;
-                        ui.close_menu();
+                        ui.memory_mut(|mem| mem.close_popup());
                     }
                     ui.separator();
                     if ui.button("🚪 Quit").clicked() {
                         action_quit = true;
-                        ui.close_menu();
+                        ui.memory_mut(|mem| mem.close_popup());
                     }
                 });
-
-                // Also show menu on left click
-                if burger_response.clicked() {
-                    ui.memory_mut(|mem| mem.toggle_popup(burger_response.id));
-                }
             });
         });
 
