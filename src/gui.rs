@@ -355,12 +355,19 @@ impl GuiApp {
             (i, file.clone(), is_selected, is_multi_selected, expanded)
         }).collect();
 
-        let selected_idx = self.app.list_state.selected();
+        let _selected_idx = self.app.list_state.selected();
 
         // Track which item was clicked/right-clicked
         let mut new_selection: Option<usize> = None;
         let mut double_clicked_folder: Option<usize> = None;
-        let mut right_clicked_item: Option<(usize, egui::Response)> = None;
+
+        // Actions to perform after the loop (to avoid borrow issues)
+        let _action_toggle_folder = false;
+        let mut action_open_viewer = false;
+        let mut action_backup = false;
+        let mut action_remove_tracking = false;
+        let mut action_expand_folder = false;
+        let mut action_collapse_folder = false;
 
         ScrollArea::vertical()
             .id_salt("status_tab_scroll")
@@ -468,15 +475,42 @@ impl GuiApp {
                     if row_response.double_clicked() && file.is_folder_node {
                         double_clicked_folder = Some(*i);
                     }
+
+                    // Right-click selects and shows context menu
                     if row_response.secondary_clicked() {
                         new_selection = Some(*i);
-                        right_clicked_item = Some((*i, row_response.clone()));
                     }
 
-                    // Scroll to selected item
-                    if selected_idx == Some(*i) {
-                        row_response.scroll_to_me(Some(egui::Align::Center));
-                    }
+                    // Context menu (must be called in same scope as response)
+                    row_response.context_menu(|ui| {
+                        if file.is_folder_node {
+                            if *expanded {
+                                if ui.button("Collapse Folder").clicked() {
+                                    action_collapse_folder = true;
+                                    ui.close_menu();
+                                }
+                            } else {
+                                if ui.button("Expand Folder").clicked() {
+                                    action_expand_folder = true;
+                                    ui.close_menu();
+                                }
+                            }
+                        } else {
+                            if ui.button("View File").clicked() {
+                                action_open_viewer = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Backup Now").clicked() {
+                                action_backup = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Remove from Tracking").clicked() {
+                                action_remove_tracking = true;
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 }
             });
 
@@ -491,40 +525,21 @@ impl GuiApp {
             self.app.toggle_folder();
         }
 
-        // Show context menu for right-clicked item
-        if let Some((i, response)) = right_clicked_item {
-            if i < self.app.files.len() {
-                let file = self.app.files[i].clone();
-                response.context_menu(|ui| {
-                    if file.is_folder_node {
-                        if self.app.expanded_folders.contains(&file.path) {
-                            if ui.button("Collapse Folder").clicked() {
-                                self.app.collapse_folder();
-                                ui.close_menu();
-                            }
-                        } else {
-                            if ui.button("Expand Folder").clicked() {
-                                self.app.expand_folder();
-                                ui.close_menu();
-                            }
-                        }
-                    } else {
-                        if ui.button("View File").clicked() {
-                            self.app.open_viewer();
-                            ui.close_menu();
-                        }
-                        if ui.button("Backup Now").clicked() {
-                            self.app.perform_backup(None);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Remove from Tracking").clicked() {
-                            self.app.toggle_tracking();
-                            ui.close_menu();
-                        }
-                    }
-                });
-            }
+        // Handle context menu actions
+        if action_collapse_folder {
+            self.app.collapse_folder();
+        }
+        if action_expand_folder {
+            self.app.expand_folder();
+        }
+        if action_open_viewer {
+            self.app.open_viewer();
+        }
+        if action_backup {
+            self.app.perform_backup(None);
+        }
+        if action_remove_tracking {
+            self.app.toggle_tracking();
         }
     }
 
@@ -566,12 +581,19 @@ impl GuiApp {
             (i, file.clone(), is_selected, is_multi_selected)
         }).collect();
 
-        let selected_idx = self.app.list_state.selected();
+        let _selected_idx = self.app.list_state.selected();
 
         // Track which item was clicked/right-clicked
         let mut new_selection: Option<usize> = None;
         let mut double_clicked_item: Option<usize> = None;
-        let mut right_clicked_item: Option<(usize, egui::Response)> = None;
+
+        // Actions to perform after the loop
+        let mut action_enter_dir = false;
+        let mut action_add_folder_pattern = false;
+        let mut action_recursive_preview = false;
+        let mut action_remove_tracking = false;
+        let mut action_add_tracking = false;
+        let mut action_open_viewer = false;
 
         ScrollArea::vertical()
             .id_salt("add_tab_scroll")
@@ -645,13 +667,42 @@ impl GuiApp {
                     }
                     if row_response.secondary_clicked() {
                         new_selection = Some(*i);
-                        right_clicked_item = Some((*i, row_response.clone()));
                     }
 
-                    // Scroll to selected item
-                    if selected_idx == Some(*i) {
-                        row_response.scroll_to_me(Some(egui::Align::Center));
-                    }
+                    // Context menu (must be in same scope as response)
+                    row_response.context_menu(|ui| {
+                        if file.is_dir {
+                            if ui.button("Open Folder").clicked() {
+                                action_enter_dir = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Add Folder Pattern (/**)").clicked() {
+                                action_add_folder_pattern = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Recursive Add Preview").clicked() {
+                                action_recursive_preview = true;
+                                ui.close_menu();
+                            }
+                        } else {
+                            if file.is_tracked {
+                                if ui.button("Remove from Tracking").clicked() {
+                                    action_remove_tracking = true;
+                                    ui.close_menu();
+                                }
+                            } else {
+                                if ui.button("Add to Tracking").clicked() {
+                                    action_add_tracking = true;
+                                    ui.close_menu();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("View File").clicked() {
+                                action_open_viewer = true;
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 }
             });
 
@@ -665,7 +716,7 @@ impl GuiApp {
             self.app.list_state.select(Some(i));
             if i < self.app.files.len() {
                 if self.app.files[i].is_dir {
-                    self.app.selected.clear(); // Clear selection when entering folder
+                    self.app.selected.clear();
                     self.app.enter_directory();
                 } else {
                     self.app.toggle_tracking();
@@ -673,44 +724,24 @@ impl GuiApp {
             }
         }
 
-        // Show context menu for right-clicked item
-        if let Some((i, response)) = right_clicked_item {
-            if i < self.app.files.len() {
-                let file = self.app.files[i].clone();
-                response.context_menu(|ui| {
-                    if file.is_dir {
-                        if ui.button("Open Folder").clicked() {
-                            self.app.enter_directory();
-                            ui.close_menu();
-                        }
-                        if ui.button("Add Folder Pattern (/**)").clicked() {
-                            self.app.add_folder_pattern();
-                            ui.close_menu();
-                        }
-                        if ui.button("Recursive Add Preview").clicked() {
-                            self.app.start_recursive_preview();
-                            ui.close_menu();
-                        }
-                    } else {
-                        if file.is_tracked {
-                            if ui.button("Remove from Tracking").clicked() {
-                                self.app.remove_from_tracking_in_browser();
-                                ui.close_menu();
-                            }
-                        } else {
-                            if ui.button("Add to Tracking").clicked() {
-                                self.app.toggle_tracking();
-                                ui.close_menu();
-                            }
-                        }
-                        ui.separator();
-                        if ui.button("View File").clicked() {
-                            self.app.open_viewer();
-                            ui.close_menu();
-                        }
-                    }
-                });
-            }
+        // Handle context menu actions
+        if action_enter_dir {
+            self.app.enter_directory();
+        }
+        if action_add_folder_pattern {
+            self.app.add_folder_pattern();
+        }
+        if action_recursive_preview {
+            self.app.start_recursive_preview();
+        }
+        if action_remove_tracking {
+            self.app.remove_from_tracking_in_browser();
+        }
+        if action_add_tracking {
+            self.app.toggle_tracking();
+        }
+        if action_open_viewer {
+            self.app.open_viewer();
         }
     }
 
@@ -726,12 +757,12 @@ impl GuiApp {
                     (i, commit.clone(), is_selected, is_multi_selected)
                 }).collect();
 
-                let selected_idx = self.app.restore_list_state.selected();
+                let _selected_idx = self.app.restore_list_state.selected();
 
                 // Track which item was clicked/right-clicked
                 let mut new_selection: Option<usize> = None;
                 let mut double_clicked_item: Option<usize> = None;
-                let mut right_clicked_item: Option<(usize, egui::Response)> = None;
+                let mut action_select_commit = false;
 
                 ScrollArea::vertical()
                     .id_salt("restore_commits_scroll")
@@ -793,13 +824,15 @@ impl GuiApp {
                             }
                             if row_response.secondary_clicked() {
                                 new_selection = Some(*i);
-                                right_clicked_item = Some((*i, row_response.clone()));
                             }
 
-                            // Scroll to selected item
-                            if selected_idx == Some(*i) {
-                                row_response.scroll_to_me(Some(egui::Align::Center));
-                            }
+                            // Context menu (must be in same scope as response)
+                            row_response.context_menu(|ui| {
+                                if ui.button("Select This Backup").clicked() {
+                                    action_select_commit = true;
+                                    ui.close_menu();
+                                }
+                            });
                         }
                     });
 
@@ -814,14 +847,9 @@ impl GuiApp {
                     self.app.select_commit();
                 }
 
-                // Show context menu for right-clicked item
-                if let Some((_i, response)) = right_clicked_item {
-                    response.context_menu(|ui| {
-                        if ui.button("Select This Backup").clicked() {
-                            self.app.select_commit();
-                            ui.close_menu();
-                        }
-                    });
+                // Handle context menu action
+                if action_select_commit {
+                    self.app.select_commit();
                 }
             }
             RestoreView::Files => {
@@ -847,11 +875,13 @@ impl GuiApp {
                     (i, file.clone(), is_selected, is_multi_selected)
                 }).collect();
 
-                let selected_idx = self.app.restore_list_state.selected();
+                let _selected_idx = self.app.restore_list_state.selected();
 
                 // Track which item was clicked/right-clicked
                 let mut new_selection: Option<usize> = None;
-                let mut right_clicked_item: Option<(usize, egui::Response)> = None;
+                let mut action_restore = false;
+                let mut action_view = false;
+                let mut action_back = false;
 
                 ScrollArea::vertical()
                     .id_salt("restore_files_scroll")
@@ -914,13 +944,24 @@ impl GuiApp {
                             }
                             if row_response.secondary_clicked() {
                                 new_selection = Some(*i);
-                                right_clicked_item = Some((*i, row_response.clone()));
                             }
 
-                            // Scroll to selected item
-                            if selected_idx == Some(*i) {
-                                row_response.scroll_to_me(Some(egui::Align::Center));
-                            }
+                            // Context menu (must be in same scope as response)
+                            row_response.context_menu(|ui| {
+                                if ui.button("Restore File").clicked() {
+                                    action_restore = true;
+                                    ui.close_menu();
+                                }
+                                if ui.button("View File").clicked() {
+                                    action_view = true;
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button("Back to Backups").clicked() {
+                                    action_back = true;
+                                    ui.close_menu();
+                                }
+                            });
                         }
                     });
 
@@ -929,23 +970,15 @@ impl GuiApp {
                     self.app.restore_list_state.select(Some(i));
                 }
 
-                // Show context menu for right-clicked item
-                if let Some((_i, response)) = right_clicked_item {
-                    response.context_menu(|ui| {
-                        if ui.button("Restore File").clicked() {
-                            self.app.perform_restore();
-                            ui.close_menu();
-                        }
-                        if ui.button("View File").clicked() {
-                            self.app.open_viewer();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("Back to Backups").clicked() {
-                            self.app.back_to_commits();
-                            ui.close_menu();
-                        }
-                    });
+                // Handle context menu actions
+                if action_restore {
+                    self.app.perform_restore();
+                }
+                if action_view {
+                    self.app.open_viewer();
+                }
+                if action_back {
+                    self.app.back_to_commits();
                 }
             }
         }
