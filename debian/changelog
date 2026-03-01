@@ -1,0 +1,19 @@
+dotmatrix (0.4.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * Fix backup from dmgui spawning wrong executable
+
+ -- Woofson <https://github.com/Woofson>  Sat, 01 Mar 2026 12:00:00 +0000
+
+dotmatrix (0.4.1-1) unstable; urgency=medium
+
+  * Add icon and screenshot assets
+  * Update CHANGELOG for v0.4.0 and v0.4.1
+
+ -- Woofson <https://github.com/Woofson>  Fri, 28 Feb 2026 12:00:00 +0000
+
+dotmatrix (0.4.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging
+
+ -- Woofson <https://github.com/Woofson>  Thu, 27 Feb 2026 12:00:00 +0000

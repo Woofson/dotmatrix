@@ -1,0 +1,25 @@
+Source: dotmatrix
+Section: utils
+Priority: optional
+Maintainer: Woofson <https://github.com/Woofson>
+Build-Depends: debhelper-compat (= 13), cargo, rustc, libxcb1-dev, libxkbcommon-dev, libgl1-mesa-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/Woofson/dotmatrix
+Rules-Requires-Root: no
+
+Package: dotmatrix
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, git
+Recommends: libxcb1, libxkbcommon0, libgl1
+Description: Dotfile management and versioning tool
+ Dotmatrix is a cross-platform dotfile management tool that indexes
+ configuration files where they live, without using symlinks. It provides
+ version control through git integration and supports two backup modes:
+ incremental (content-addressed) and archive (tarballs).
+ .
+ Features:
+  - Track dotfiles in-place without symlinks
+  - Git-based version control
+  - Content-addressed incremental backups
+  - Archive-based snapshot backups
+  - Interactive TUI and GUI interfaces

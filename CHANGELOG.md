@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-02-18
+
+### Fixed
+- **dmgui:** Backup now correctly calls `dotmatrix` instead of spawning another `dmgui` instance
+
+### Added
+- **Assets:** App icon (SVG, PNG, ICO) and screenshots
+- **Installer:** Uses custom icon for shortcuts and setup wizard
+
 ## [0.4.1] - 2026-02-18
 
 ### GUI Improvements

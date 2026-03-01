@@ -3,7 +3,7 @@
 ; Requires Inno Setup 6.x
 
 #define AppName "dotmatrix"
-#define AppVersion "0.4.1"
+#define AppVersion "0.4.2"
 #define AppPublisher "Woofson"
 #define AppURL "https://github.com/Woofson/dotmatrix"
 #define AppExeName "dotmatrix.exe"
