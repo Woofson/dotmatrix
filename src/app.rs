@@ -7,12 +7,14 @@
 use crate::config::{BackupMode, Config, TrackedPattern};
 use crate::index::Index;
 use crate::scanner::{self, RecursiveScanOptions, Verbosity};
+use age::secrecy::SecretString;
 use anyhow::Result;
 use ratatui::widgets::ListState;
 use ratatui::style::{Color, Style, Modifier};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use syntect::highlighting::{ThemeSet, Style as SyntectStyle};
@@ -133,6 +135,14 @@ pub enum AddSubMode {
     RecursivePreview, // Previewing recursive add
 }
 
+/// Purpose of password prompt
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasswordPurpose {
+    #[default]
+    Backup,  // Password needed for encrypting files during backup
+    Restore, // Password needed for decrypting files during restore
+}
+
 /// File entry for recursive preview
 #[derive(Debug, Clone)]
 pub struct PreviewFile {
@@ -229,6 +239,14 @@ pub struct App {
     pub add_tab_state: TabState,
     pub restore_commits_state: TabState,
     pub restore_files_state: TabState,
+    // Encryption state
+    pub encryption_password: Option<SecretString>,
+    pub password_prompt_visible: bool,
+    pub password_input: String,
+    pub password_purpose: PasswordPurpose,
+    // Git remote dialog state
+    pub remote_dialog_visible: bool,
+    pub remote_url_input: String,
 }
 
 impl App {
@@ -277,6 +295,12 @@ impl App {
             add_tab_state: TabState::default(),
             restore_commits_state: TabState::default(),
             restore_files_state: TabState::default(),
+            encryption_password: None,
+            password_prompt_visible: false,
+            password_input: String::new(),
+            password_purpose: PasswordPurpose::Backup,
+            remote_dialog_visible: false,
+            remote_url_input: String::new(),
         };
         app.refresh_files();
         app.load_commits();
@@ -1772,6 +1796,153 @@ impl App {
         self.viewer_content.clear();
         self.viewer_scroll = 0;
         self.viewer_title.clear();
+    }
+
+    /// Check if any tracked pattern has encryption enabled
+    pub fn has_encrypted_patterns(&self) -> bool {
+        self.config.tracked_files.iter().any(|p| p.encrypted())
+    }
+
+    /// Check if encryption password is needed for backup
+    /// Returns true if there are encrypted patterns and no password is cached
+    pub fn needs_password_for_backup(&self, files: &[PathBuf]) -> bool {
+        if self.encryption_password.is_some() {
+            return false;
+        }
+
+        // Check if any of the files to backup match encrypted patterns
+        for file in files {
+            if self.is_file_encrypted(file) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a specific file should be encrypted based on matching patterns
+    pub fn is_file_encrypted(&self, file: &PathBuf) -> bool {
+        for pattern in self.config.tracked_files.iter().rev() {
+            if let Ok(expanded) = scanner::expand_tilde(pattern.path()) {
+                if file.starts_with(&expanded) || *file == expanded {
+                    return pattern.encrypted();
+                }
+            }
+        }
+        false
+    }
+
+    /// Show password prompt for encryption
+    pub fn show_password_prompt(&mut self, purpose: PasswordPurpose) {
+        self.password_purpose = purpose;
+        self.password_input.clear();
+        self.password_prompt_visible = true;
+    }
+
+    /// Confirm password input
+    pub fn confirm_password(&mut self) {
+        if !self.password_input.is_empty() {
+            self.encryption_password = Some(SecretString::from(self.password_input.clone()));
+        }
+        self.password_input.clear();
+        self.password_prompt_visible = false;
+    }
+
+    /// Cancel password prompt
+    pub fn cancel_password(&mut self) {
+        self.password_input.clear();
+        self.password_prompt_visible = false;
+    }
+
+    /// Show remote URL dialog
+    pub fn show_remote_dialog(&mut self) {
+        self.remote_url_input = self.config.git_remote_url.clone().unwrap_or_default();
+        self.remote_dialog_visible = true;
+    }
+
+    /// Confirm remote URL input
+    pub fn confirm_remote_url(&mut self) {
+        if self.remote_url_input.is_empty() {
+            self.config.git_remote_url = None;
+        } else {
+            self.config.git_remote_url = Some(self.remote_url_input.clone());
+        }
+        self.config_dirty = true;
+        self.remote_dialog_visible = false;
+        self.message = Some("Remote URL saved (saves on exit)".to_string());
+    }
+
+    /// Cancel remote URL dialog
+    pub fn cancel_remote_dialog(&mut self) {
+        self.remote_url_input.clear();
+        self.remote_dialog_visible = false;
+    }
+
+    /// Push to git remote
+    pub fn git_push(&mut self) -> Result<String> {
+        let remote_url = match &self.config.git_remote_url {
+            Some(url) => url.clone(),
+            None => return Err(anyhow::anyhow!("No remote URL configured")),
+        };
+
+        // First, ensure remote is set
+        let _ = Command::new("git")
+            .args(["remote", "remove", "origin"])
+            .current_dir(&self.data_dir)
+            .output();
+
+        Command::new("git")
+            .args(["remote", "add", "origin", &remote_url])
+            .current_dir(&self.data_dir)
+            .output()?;
+
+        // Push to remote
+        let output = Command::new("git")
+            .args(["push", "-u", "origin", "HEAD"])
+            .current_dir(&self.data_dir)
+            .output()?;
+
+        if output.status.success() {
+            Ok("Pushed to remote successfully".to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(anyhow::anyhow!("Push failed: {}", stderr.trim()))
+        }
+    }
+
+    /// Pull from git remote
+    pub fn git_pull(&mut self) -> Result<String> {
+        let remote_url = match &self.config.git_remote_url {
+            Some(url) => url.clone(),
+            None => return Err(anyhow::anyhow!("No remote URL configured")),
+        };
+
+        // Ensure remote is set
+        let _ = Command::new("git")
+            .args(["remote", "remove", "origin"])
+            .current_dir(&self.data_dir)
+            .output();
+
+        Command::new("git")
+            .args(["remote", "add", "origin", &remote_url])
+            .current_dir(&self.data_dir)
+            .output()?;
+
+        // Pull from remote
+        let output = Command::new("git")
+            .args(["pull", "origin", "HEAD"])
+            .current_dir(&self.data_dir)
+            .output()?;
+
+        if output.status.success() {
+            // Reload index after pull
+            self.reload_index();
+            self.load_commits();
+            self.refresh_files();
+            Ok("Pulled from remote successfully".to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(anyhow::anyhow!("Pull failed: {}", stderr.trim()))
+        }
     }
 
     /// Perform backup of selected or all tracked files (async)

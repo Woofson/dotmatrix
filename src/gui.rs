@@ -4,7 +4,7 @@
 //! the TUI functionality. It uses the shared `App` state from the `app` module.
 
 use crate::app::{
-    App, AddSubMode, RestoreView, TuiMode,
+    App, AddSubMode, PasswordPurpose, RestoreView, TuiMode,
     format_size, SPINNER_FRAMES,
 };
 use crate::config::{BackupMode, Config, TrackedPattern};
@@ -91,6 +91,15 @@ impl GuiApp {
                     self.app.backup_message_input.clear();
                     self.app.backup_message_mode = false;
                 }
+                // Then: close password prompt
+                else if self.app.password_prompt_visible {
+                    self.app.cancel_password();
+                    self.app.message = Some("Password required for encrypted files".to_string());
+                }
+                // Then: close remote dialog
+                else if self.app.remote_dialog_visible {
+                    self.app.cancel_remote_dialog();
+                }
                 // Then: go back in Add mode (but don't quit at home)
                 else if self.app.mode == TuiMode::Add {
                     let home = dirs::home_dir().unwrap_or_default();
@@ -112,7 +121,7 @@ impl GuiApp {
             }
 
             // Navigation (if not in overlay mode)
-            if !self.app.show_help && !self.app.viewer_visible && !self.app.add_mode && !self.app.backup_message_mode {
+            if !self.app.show_help && !self.app.viewer_visible && !self.app.add_mode && !self.app.backup_message_mode && !self.app.password_prompt_visible && !self.app.remote_dialog_visible {
                 // Tab switching
                 if i.key_pressed(Key::Tab) && !i.modifiers.shift {
                     self.app.next_mode();
@@ -1225,6 +1234,94 @@ impl GuiApp {
             });
     }
 
+    fn render_password_dialog(&mut self, ctx: &egui::Context) {
+        let title = match self.app.password_purpose {
+            PasswordPurpose::Backup => "Enter Encryption Password (Backup)",
+            PasswordPurpose::Restore => "Enter Encryption Password (Restore)",
+        };
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Enter the password for encrypted files:");
+                ui.add_space(10.0);
+
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.app.password_input)
+                        .password(true)
+                        .desired_width(300.0)
+                        .hint_text("Password")
+                );
+
+                self.text_input_focus = response.has_focus();
+                response.request_focus();
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Confirm").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        self.app.confirm_password();
+                        self.text_input_focus = false;
+                        // Continue with the operation that needed the password
+                        match self.app.password_purpose {
+                            PasswordPurpose::Backup => {
+                                self.app.perform_backup(None);
+                            }
+                            PasswordPurpose::Restore => {
+                                self.app.perform_restore();
+                            }
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.app.cancel_password();
+                        self.text_input_focus = false;
+                        self.app.message = Some("Password required for encrypted files".to_string());
+                    }
+                });
+
+                ui.add_space(5.0);
+                ui.label(RichText::new("Files marked with encrypted=true require a password").color(Colors::DARK_GRAY).small());
+            });
+    }
+
+    fn render_remote_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Git Remote URL")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Enter the URL of your git remote:");
+                ui.add_space(10.0);
+
+                let response = ui.add(
+                    TextEdit::singleline(&mut self.app.remote_url_input)
+                        .desired_width(400.0)
+                        .hint_text("https://github.com/user/dotfiles.git")
+                );
+
+                self.text_input_focus = response.has_focus();
+                response.request_focus();
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                        self.app.confirm_remote_url();
+                        self.text_input_focus = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.app.cancel_remote_dialog();
+                        self.text_input_focus = false;
+                    }
+                });
+
+                ui.add_space(5.0);
+                ui.label(RichText::new("Leave empty to remove remote configuration").color(Colors::DARK_GRAY).small());
+            });
+    }
+
     fn render_help_overlay(&mut self, ctx: &egui::Context) {
         egui::Window::new("Help & About")
             .collapsible(false)
@@ -1372,6 +1469,26 @@ impl GuiApp {
                         if ui.button("View (v)").clicked() {
                             self.app.open_viewer();
                         }
+                        ui.separator();
+                        // Git sync buttons
+                        if self.app.config.git_remote_url.is_some() {
+                            if ui.button("Pull").clicked() {
+                                match self.app.git_pull() {
+                                    Ok(msg) => self.app.message = Some(msg),
+                                    Err(e) => self.app.message = Some(format!("Pull failed: {}", e)),
+                                }
+                            }
+                            if ui.button("Push").clicked() {
+                                match self.app.git_push() {
+                                    Ok(msg) => self.app.message = Some(msg),
+                                    Err(e) => self.app.message = Some(format!("Push failed: {}", e)),
+                                }
+                            }
+                        } else {
+                            if ui.button("Set Remote...").clicked() {
+                                self.app.show_remote_dialog();
+                            }
+                        }
                     }
                     TuiMode::Add => {
                         if ui.button("Add (Enter)").clicked() {
@@ -1498,6 +1615,14 @@ impl eframe::App for GuiApp {
 
         if self.app.backup_message_mode {
             self.render_backup_message_dialog(ctx);
+        }
+
+        if self.app.password_prompt_visible {
+            self.render_password_dialog(ctx);
+        }
+
+        if self.app.remote_dialog_visible {
+            self.render_remote_dialog(ctx);
         }
     }
 }

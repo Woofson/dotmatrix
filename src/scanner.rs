@@ -273,6 +273,7 @@ pub fn scan_file(path: &Path) -> Result<FileEntry> {
         hash,
         last_modified,
         size,
+        encrypted: false, // Encryption status is set during backup based on config
     })
 }
 

@@ -9,6 +9,9 @@ pub struct FileEntry {
     pub hash: String,
     pub last_modified: u64,
     pub size: u64,
+    /// Whether the file is stored encrypted in backup
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -4,7 +4,7 @@
 //! and logic is in the `app` module.
 
 use crate::app::{
-    App, AddSubMode, RestoreView, TuiMode,
+    App, AddSubMode, PasswordPurpose, RestoreView, TuiMode,
     format_size, SPINNER_FRAMES,
 };
 use crate::config::{BackupMode, Config, TrackedPattern};
@@ -181,6 +181,56 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Char('q') => {
                         app.cancel_recursive_preview();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Handle password prompt mode
+            if app.password_prompt_visible {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_password();
+                        // Continue with the operation that needed the password
+                        match app.password_purpose {
+                            PasswordPurpose::Backup => {
+                                app.perform_backup(None);
+                            }
+                            PasswordPurpose::Restore => {
+                                app.perform_restore();
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_password();
+                        app.message = Some("Password required for encrypted files".to_string());
+                    }
+                    KeyCode::Backspace => {
+                        app.password_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.password_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Handle remote URL dialog
+            if app.remote_dialog_visible {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_remote_url();
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_remote_dialog();
+                    }
+                    KeyCode::Backspace => {
+                        app.remote_url_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.remote_url_input.push(c);
                     }
                     _ => {}
                 }
@@ -415,6 +465,38 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     // View file contents
                     app.open_viewer();
                 }
+                KeyCode::Char('p') => {
+                    // Pull from remote (Status tab only)
+                    if app.mode == TuiMode::Status {
+                        if app.config.git_remote_url.is_some() {
+                            match app.git_pull() {
+                                Ok(msg) => app.message = Some(msg),
+                                Err(e) => app.message = Some(format!("Pull failed: {}", e)),
+                            }
+                        } else {
+                            app.message = Some("No remote configured. Press 'U' to set one.".to_string());
+                        }
+                    }
+                }
+                KeyCode::Char('P') => {
+                    // Push to remote (Status tab only)
+                    if app.mode == TuiMode::Status {
+                        if app.config.git_remote_url.is_some() {
+                            match app.git_push() {
+                                Ok(msg) => app.message = Some(msg),
+                                Err(e) => app.message = Some(format!("Push failed: {}", e)),
+                            }
+                        } else {
+                            app.message = Some("No remote configured. Press 'U' to set one.".to_string());
+                        }
+                    }
+                }
+                KeyCode::Char('U') => {
+                    // Set remote URL (Status tab only)
+                    if app.mode == TuiMode::Status {
+                        app.show_remote_dialog();
+                    }
+                }
                 _ => {}
             }
         }
@@ -463,6 +545,10 @@ fn ui(f: &mut Frame, app: &App) {
         render_help(f, chunks[1], app.help_scroll);
     } else if app.viewer_visible {
         render_viewer(f, chunks[1], app);
+    } else if app.password_prompt_visible {
+        render_password_input(f, chunks[1], app);
+    } else if app.remote_dialog_visible {
+        render_remote_input(f, chunks[1], app);
     } else if app.add_mode {
         render_add_input(f, chunks[1], app);
     } else if app.backup_message_mode {
@@ -1011,6 +1097,24 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("           Collapse all folders"),
         ]),
         Line::from(""),
+        Line::from(Span::styled("  GIT SYNC (Status tab)", header_style)),
+        Line::from(Span::styled("  =====================", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("p", key_style),
+            Span::raw("           Pull from remote"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("P", key_style),
+            Span::raw("           Push to remote"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("U", key_style),
+            Span::raw("           Set remote URL"),
+        ]),
+        Line::from(""),
         Line::from(Span::styled("  ADD FILES TAB", header_style)),
         Line::from(Span::styled("  =============", dim_style)),
         Line::from(vec![
@@ -1198,6 +1302,106 @@ fn render_backup_input(f: &mut Frame, area: Rect, app: &App) {
 
     let hint_para = Paragraph::new(hints)
         .block(Block::default().borders(Borders::ALL).title(" Hints "))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(hint_para, input_area[1]);
+}
+
+fn render_password_input(f: &mut Frame, area: Rect, app: &App) {
+    let input_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    // Show masked password
+    let masked: String = "*".repeat(app.password_input.len());
+    let title = match app.password_purpose {
+        PasswordPurpose::Backup => " Enter password for encrypted files (backup) ",
+        PasswordPurpose::Restore => " Enter password for encrypted files (restore) ",
+    };
+
+    let input = Paragraph::new(masked)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title),
+        )
+        .style(Style::default().fg(Color::Yellow));
+
+    f.render_widget(input, input_area[0]);
+
+    let hints = vec![
+        Line::from(""),
+        Line::from("  Enter the encryption password for your files."),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::raw("  Confirm password"),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw("    Cancel operation"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Password is used to encrypt/decrypt files marked with encrypted=true", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
+    ];
+
+    let hint_para = Paragraph::new(hints)
+        .block(Block::default().borders(Borders::ALL).title(" Encryption "))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(hint_para, input_area[1]);
+}
+
+fn render_remote_input(f: &mut Frame, area: Rect, app: &App) {
+    let input_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    let input = Paragraph::new(app.remote_url_input.as_str())
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Git Remote URL (Enter to confirm, Esc to cancel) "),
+        )
+        .style(Style::default().fg(Color::Yellow));
+
+    f.render_widget(input, input_area[0]);
+
+    let hints = vec![
+        Line::from(""),
+        Line::from("  Enter the URL of your git remote:"),
+        Line::from(""),
+        Line::from(Span::styled("    https://github.com/user/dotfiles.git", Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled("    git@github.com:user/dotfiles.git", Style::default().fg(Color::Cyan))),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("p", Style::default().fg(Color::Green)),
+            Span::raw("  Pull from remote"),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("P", Style::default().fg(Color::Green)),
+            Span::raw("  Push to remote"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Leave empty to remove remote configuration", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
+    ];
+
+    let hint_para = Paragraph::new(hints)
+        .block(Block::default().borders(Borders::ALL).title(" Git Sync "))
         .style(Style::default().fg(Color::White));
 
     f.render_widget(hint_para, input_area[1]);

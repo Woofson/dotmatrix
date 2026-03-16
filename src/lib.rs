@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod crypto;
 pub mod gui;
 pub mod index;
 pub mod scanner;

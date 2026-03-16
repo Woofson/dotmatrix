@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-16
+
+### Added
+- **Per-file encryption:** Files can be marked with `encrypted = true` in config for password-based encryption using the age standard
+  - Config example: `{ path = "~/.ssh/config", encrypted = true }`
+  - Password prompt in TUI and GUI before backup/restore of encrypted files
+  - Uses age-encryption.org standard (compatible with `age` CLI tool)
+- **Git sync:** Push and pull backups to/from remote repositories
+  - New `git_remote_url` config option for remote URL
+  - TUI: `p` to pull, `P` to push, `U` to set remote URL
+  - GUI: Pull/Push buttons in status bar (or "Set Remote..." if not configured)
+- **Auto-generated README.md:** Backup repository now includes a README with:
+  - Statistics (file count, last backup time)
+  - Table of recent backups with dates and commit messages
+  - Directory structure documentation
+
+### Changed
+- `FileEntry` now includes `encrypted` field to track encryption status
+- `TrackedPattern::WithOptions` now supports `encrypted` boolean field
+
+### Dependencies
+- Added `age = "0.11"` for password-based encryption
+
 ## [0.4.2] - 2026-02-18
 
 ### Fixed

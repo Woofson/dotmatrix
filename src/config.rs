@@ -69,6 +69,8 @@ pub enum TrackedPattern {
         path: String,
         #[serde(default)]
         mode: Option<BackupMode>,
+        #[serde(default)]
+        encrypted: bool,
     },
 }
 
@@ -94,6 +96,14 @@ impl TrackedPattern {
         }
     }
 
+    /// Check if this pattern requires encryption
+    pub fn encrypted(&self) -> bool {
+        match self {
+            TrackedPattern::Simple(_) => false,
+            TrackedPattern::WithOptions { encrypted, .. } => *encrypted,
+        }
+    }
+
     /// Check if this pattern matches a path string
     pub fn matches_path(&self, path: &str) -> bool {
         self.path() == path
@@ -104,11 +114,17 @@ impl std::fmt::Display for TrackedPattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TrackedPattern::Simple(p) => write!(f, "{}", p),
-            TrackedPattern::WithOptions { path, mode } => {
-                if let Some(m) = mode {
-                    write!(f, "{} ({})", path, m.as_str())
-                } else {
+            TrackedPattern::WithOptions { path, mode, encrypted } => {
+                let mode_str = mode.map(|m| m.as_str()).unwrap_or("");
+                let enc_str = if *encrypted { "encrypted" } else { "" };
+                let flags: Vec<&str> = [mode_str, enc_str].iter()
+                    .filter(|s| !s.is_empty())
+                    .copied()
+                    .collect();
+                if flags.is_empty() {
                     write!(f, "{}", path)
+                } else {
+                    write!(f, "{} ({})", path, flags.join(", "))
                 }
             }
         }
@@ -144,6 +160,10 @@ pub struct Config {
     /// "tui" = always use TUI
     #[serde(default)]
     pub preferred_interface: PreferredInterface,
+    /// Git remote URL for push/pull operations (optional)
+    /// Example: "https://github.com/user/dotfiles.git"
+    #[serde(default)]
+    pub git_remote_url: Option<String>,
 }
 
 impl Default for Config {
@@ -175,6 +195,7 @@ impl Default for Config {
                 "**/node_modules/**".to_string(),
             ],
             preferred_interface: PreferredInterface::Auto,
+            git_remote_url: None,
         }
     }
 }
