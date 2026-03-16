@@ -15,6 +15,13 @@
 # Enable git versioning for backups (recommended)
 git_enabled = true
 
+# Git remote URL for push/pull sync (optional)
+# Set this to sync backups to a remote repository
+# TUI: Press 'p' to pull, 'P' to push, 'U' to set URL
+# GUI: Use Pull/Push buttons in status bar
+# git_remote_url = "https://github.com/username/dotfiles-backup.git"
+# git_remote_url = "git@github.com:username/dotfiles-backup.git"
+
 # Backup mode: "incremental" or "archive"
 #   incremental = Content-addressed storage (deduplication, git-versioned)
 #   archive = Create timestamped archives (tar.gz, zip, or 7z)
@@ -35,6 +42,10 @@ preferred_interface = "auto"
 # Files and patterns to track
 # Use ~ for home directory (works on all platforms)
 # Supports glob patterns: *, **, ?
+#
+# Simple format: just a path string
+# Extended format: { path = "...", mode = "...", encrypted = true/false }
+#
 tracked_files = [
     # Shell configs
     "~/.bashrc",
@@ -44,8 +55,10 @@ tracked_files = [
     # Git config
     "~/.gitconfig",
 
-    # SSH config (be careful with private keys!)
+    # SSH config (consider encrypting sensitive files!)
     "~/.ssh/config",
+    # Encrypt SSH config for extra security:
+    # { path = "~/.ssh/config", encrypted = true },
 
     # Editor configs
     "~/.vimrc",
@@ -54,8 +67,34 @@ tracked_files = [
     # Other configs
     "~/.config/dotmatrix/*",
 
-    # Per-pattern backup mode (overrides global setting)
+    # ─────────────────────────────────────────────────────────
+    # ENCRYPTION EXAMPLES
+    # ─────────────────────────────────────────────────────────
+    # Files marked with 'encrypted = true' are encrypted with
+    # a password before being stored in the backup.
+    #
+    # Uses the age-encryption.org standard, compatible with
+    # the 'age' CLI tool for manual decryption if needed.
+    #
+    # TUI/GUI: You'll be prompted for a password
+    # CLI: Use --password-file, --password-stdin, or DOTMATRIX_PASSWORD
+    #
+    # Examples:
+    # { path = "~/.ssh/config", encrypted = true },
+    # { path = "~/.gnupg/**", encrypted = true },
+    # { path = "~/.aws/credentials", encrypted = true },
+    # { path = "~/.kube/config", encrypted = true },
+    # { path = "~/.netrc", encrypted = true },
+
+    # ─────────────────────────────────────────────────────────
+    # PER-PATTERN BACKUP MODE
+    # ─────────────────────────────────────────────────────────
+    # Override the global backup_mode for specific patterns:
     # { path = "~/.config/large-app/**", mode = "archive" },
+    # { path = "~/.mozilla/firefox/**", mode = "archive" },
+    #
+    # Combine mode and encryption:
+    # { path = "~/.password-store/**", mode = "archive", encrypted = true },
 ]
 
 # Patterns to exclude from tracking
@@ -67,4 +106,32 @@ exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
     "**/Thumbs.db",
+    # Exclude private keys (track them separately with encryption if needed)
+    "**/*.pem",
+    "**/id_rsa",
+    "**/id_ed25519",
 ]
+
+# ═══════════════════════════════════════════════════════════════
+# CLI ENCRYPTION FOR SCRIPTS AND CRON
+# ═══════════════════════════════════════════════════════════════
+#
+# When using encrypted files with CLI commands (backup/restore),
+# provide the password using one of these methods:
+#
+# 1. Password file (recommended for cron):
+#    dotmatrix backup --password-file ~/.dotmatrix-pass
+#    Make sure to: chmod 600 ~/.dotmatrix-pass
+#
+# 2. Stdin (good for scripts):
+#    echo "mypassword" | dotmatrix backup --password-stdin
+#    cat ~/.dotmatrix-pass | dotmatrix restore --password-stdin
+#
+# 3. Environment variable (fallback):
+#    export DOTMATRIX_PASSWORD="mypassword"
+#    dotmatrix backup
+#
+# Priority: stdin > password-file > environment variable
+#
+# Example cron job (daily backup at 2am):
+#   0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Scheduled backup"

@@ -1,6 +1,8 @@
+use age::secrecy::SecretString;
 use chrono::{Local, TimeZone, Utc};
 use clap::{Parser, Subcommand};
 use dotmatrix::config::{ArchiveFormat, BackupMode, Config, PreferredInterface, TrackedPattern};
+use dotmatrix::crypto;
 use dotmatrix::index::{FileEntry, Index};
 use dotmatrix::scanner::{self, RecursiveScanOptions, Verbosity};
 use dotmatrix::tui;
@@ -8,7 +10,7 @@ use dotmatrix::gui;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tar::Builder;
@@ -64,6 +66,12 @@ enum Commands {
     Backup {
         #[arg(short, long)]
         message: Option<String>,
+        /// Read encryption password from file
+        #[arg(long, value_name = "FILE")]
+        password_file: Option<String>,
+        /// Read encryption password from stdin
+        #[arg(long)]
+        password_stdin: bool,
     },
     /// Restore files from storage
     Restore {
@@ -88,6 +96,12 @@ enum Commands {
         /// Remap home directory (e.g., --remap /home/olduser=/home/newuser)
         #[arg(long)]
         remap: Option<String>,
+        /// Read decryption password from file
+        #[arg(long, value_name = "FILE")]
+        password_file: Option<String>,
+        /// Read decryption password from stdin
+        #[arg(long)]
+        password_stdin: bool,
     },
     /// Show status of tracked files
     Status {
@@ -131,9 +145,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Scan { yes } => cmd_scan(yes, verbosity)?,
-        Commands::Backup { message } => cmd_backup(message, verbosity)?,
-        Commands::Restore { commit, dry_run, yes, diff, file, extract_to, remap } => {
-            cmd_restore(commit, dry_run, yes, diff, file, extract_to, remap, verbosity)?
+        Commands::Backup { message, password_file, password_stdin } => {
+            cmd_backup(message, password_file, password_stdin, verbosity)?
+        }
+        Commands::Restore { commit, dry_run, yes, diff, file, extract_to, remap, password_file, password_stdin } => {
+            cmd_restore(commit, dry_run, yes, diff, file, extract_to, remap, password_file, password_stdin, verbosity)?
         }
         Commands::Status { all, quick, json } => cmd_status(all, quick, json, verbosity)?,
         Commands::List => cmd_list()?,
@@ -192,6 +208,70 @@ fn prompt_with_default(prompt: &str, default: Option<&str>) -> String {
     } else {
         input
     }
+}
+
+/// Get encryption password from various sources (in order of precedence):
+/// 1. --password-stdin (read from stdin)
+/// 2. --password-file (read from file)
+/// 3. DOTMATRIX_PASSWORD environment variable
+///
+/// Returns None if no password source is available.
+fn get_password(
+    password_file: Option<&str>,
+    password_stdin: bool,
+) -> anyhow::Result<Option<SecretString>> {
+    // Priority 1: stdin
+    if password_stdin {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        let password = line.trim_end_matches('\n').trim_end_matches('\r');
+        if password.is_empty() {
+            anyhow::bail!("Empty password provided via stdin");
+        }
+        return Ok(Some(SecretString::from(password.to_string())));
+    }
+
+    // Priority 2: password file
+    if let Some(path) = password_file {
+        let expanded = if let Some(stripped) = path.strip_prefix("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(stripped)
+            } else {
+                PathBuf::from(path)
+            }
+        } else {
+            PathBuf::from(path)
+        };
+
+        let content = fs::read_to_string(&expanded)
+            .map_err(|e| anyhow::anyhow!("Failed to read password file '{}': {}", expanded.display(), e))?;
+        let password = content.trim_end_matches('\n').trim_end_matches('\r');
+        if password.is_empty() {
+            anyhow::bail!("Empty password in file '{}'", expanded.display());
+        }
+        return Ok(Some(SecretString::from(password.to_string())));
+    }
+
+    // Priority 3: environment variable
+    if let Ok(password) = std::env::var("DOTMATRIX_PASSWORD") {
+        if password.is_empty() {
+            anyhow::bail!("Empty DOTMATRIX_PASSWORD environment variable");
+        }
+        return Ok(Some(SecretString::from(password)));
+    }
+
+    Ok(None)
+}
+
+/// Check if a file matches an encrypted pattern
+fn is_file_encrypted(file: &Path, config: &Config) -> bool {
+    for pattern in &config.tracked_files {
+        if pattern.encrypted() && path_matches_pattern(file, pattern.path()) {
+            return true;
+        }
+    }
+    false
 }
 
 fn cmd_init() -> anyhow::Result<()> {
@@ -822,20 +902,62 @@ fn backup_incremental(
     data_dir: &PathBuf,
     message: Option<String>,
     git_enabled: bool,
+    config: &Config,
+    password: Option<&SecretString>,
 ) -> anyhow::Result<()> {
     println!("Mode: incremental (content-addressed)\n");
 
     let mut backed_up = 0;
     let mut unchanged = 0;
     let mut errors = 0;
+    let mut encrypted_count = 0;
 
     for file in files {
-        print!("Backing up: {} ... ", file.display());
+        let file_encrypted = is_file_encrypted(file, config);
+        let enc_marker = if file_encrypted { " [encrypted]" } else { "" };
+        print!("Backing up: {}{} ... ", file.display(), enc_marker);
         std::io::Write::flush(&mut std::io::stdout()).ok();
 
         match scanner::scan_file(file) {
-            Ok(entry) => {
-                let storage_path = get_file_storage_path(&entry.hash)?;
+            Ok(mut entry) => {
+                // Mark entry as encrypted if pattern requires it
+                entry.encrypted = file_encrypted;
+
+                // For encrypted files, we hash the encrypted content for deduplication
+                let (storage_hash, storage_content) = if file_encrypted {
+                    if let Some(pwd) = password {
+                        match fs::read(file) {
+                            Ok(plaintext) => {
+                                match crypto::encrypt_bytes(&plaintext, pwd) {
+                                    Ok(encrypted) => {
+                                        // Hash the encrypted content for storage
+                                        use sha2::{Sha256, Digest};
+                                        let hash = format!("{:x}", Sha256::digest(&encrypted));
+                                        (hash, Some(encrypted))
+                                    }
+                                    Err(e) => {
+                                        println!("❌ Encryption failed: {}", e);
+                                        errors += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("❌ Failed to read file: {}", e);
+                                errors += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        println!("❌ No password for encrypted file");
+                        errors += 1;
+                        continue;
+                    }
+                } else {
+                    (entry.hash.clone(), None)
+                };
+
+                let storage_path = get_file_storage_path(&storage_hash)?;
 
                 // Check if file already exists in storage (deduplication)
                 let needs_copy = !storage_path.exists();
@@ -851,7 +973,19 @@ fn backup_incremental(
                     if let Some(parent) = storage_path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::copy(file, &storage_path)?;
+                    if let Some(encrypted_content) = storage_content {
+                        // Write encrypted content
+                        fs::write(&storage_path, encrypted_content)?;
+                    } else {
+                        // Copy plaintext
+                        fs::copy(file, &storage_path)?;
+                    }
+                }
+
+                // Store the storage hash (encrypted hash for encrypted files)
+                if file_encrypted {
+                    // Keep original hash for change detection, but note it's encrypted
+                    encrypted_count += 1;
                 }
 
                 index.add_file(file.clone(), entry);
@@ -892,6 +1026,9 @@ fn backup_incremental(
     println!("\n📊 Backup complete:");
     println!("   Backed up: {}", backed_up);
     println!("   Unchanged: {}", unchanged);
+    if encrypted_count > 0 {
+        println!("   Encrypted: {}", encrypted_count);
+    }
     if errors > 0 {
         println!("   Errors: {}", errors);
     }
@@ -1180,7 +1317,12 @@ fn get_file_mode(file: &Path, config: &Config) -> BackupMode {
     config.backup_mode
 }
 
-fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<()> {
+fn cmd_backup(
+    message: Option<String>,
+    password_file: Option<String>,
+    password_stdin: bool,
+    verbosity: Verbosity,
+) -> anyhow::Result<()> {
     println!("Creating backup...\n");
 
     let config_path = dotmatrix::get_config_path()?;
@@ -1211,6 +1353,23 @@ fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<(
         println!("   Run 'dotmatrix add <pattern>' to track files first.");
         return Ok(());
     }
+
+    // Check if any files need encryption
+    let needs_encryption = files.iter().any(|f| is_file_encrypted(f, &config));
+    let password = if needs_encryption {
+        let pwd = get_password(password_file.as_deref(), password_stdin)?;
+        if pwd.is_none() {
+            println!("❌ Encrypted files found but no password provided.");
+            println!("   Use one of:");
+            println!("     --password-stdin     (echo 'pass' | dotmatrix backup)");
+            println!("     --password-file FILE (dotmatrix backup --password-file ~/.dotmatrix-pass)");
+            println!("     DOTMATRIX_PASSWORD   (export DOTMATRIX_PASSWORD='pass')");
+            return Ok(());
+        }
+        pwd
+    } else {
+        None
+    };
 
     // Group files by their effective backup mode
     let mut incremental_files: Vec<PathBuf> = Vec::new();
@@ -1245,6 +1404,8 @@ fn cmd_backup(message: Option<String>, verbosity: Verbosity) -> anyhow::Result<(
             &data_dir,
             None, // Don't commit yet
             false, // Don't commit yet
+            &config,
+            password.as_ref(),
         )?;
     }
 
@@ -1310,6 +1471,7 @@ struct FileComparison {
     backup_size: u64,
     backup_mtime: u64,
     backup_hash: String,
+    encrypted: bool,        // Whether file was encrypted during backup
 }
 
 impl FileComparison {
@@ -1446,6 +1608,8 @@ fn cmd_restore(
     filter_files: Option<Vec<String>>,
     extract_to: Option<String>,
     remap: Option<String>,
+    password_file: Option<String>,
+    password_stdin: bool,
     _verbosity: Verbosity,
 ) -> anyhow::Result<()> {
     println!("Preparing restore...\n");
@@ -1560,6 +1724,7 @@ fn cmd_restore(
             backup_size: entry.size,
             backup_mtime: entry.last_modified,
             backup_hash: entry.hash.clone(),
+            encrypted: entry.encrypted,
         });
     }
 
@@ -1637,6 +1802,23 @@ fn cmd_restore(
         println!("\n🔍 Dry run complete. No files were modified.");
         return Ok(());
     }
+
+    // Check if any files need decryption
+    let needs_decryption = to_restore.iter().any(|c| c.encrypted);
+    let password = if needs_decryption {
+        let pwd = get_password(password_file.as_deref(), password_stdin)?;
+        if pwd.is_none() {
+            println!("\n❌ Encrypted files found but no password provided.");
+            println!("   Use one of:");
+            println!("     --password-stdin     (echo 'pass' | dotmatrix restore)");
+            println!("     --password-file FILE (dotmatrix restore --password-file ~/.dotmatrix-pass)");
+            println!("     DOTMATRIX_PASSWORD   (export DOTMATRIX_PASSWORD='pass')");
+            return Ok(());
+        }
+        pwd
+    } else {
+        None
+    };
 
     // Confirmation
     let proceed = if auto_yes {
@@ -1743,15 +1925,30 @@ fn cmd_restore(
             }
         }
 
-        // Copy from storage to destination
-        match fs::copy(&storage_path, &comp.dest_path) {
+        // Restore file (decrypt if needed)
+        let restore_result = if comp.encrypted {
+            if let Some(ref pwd) = password {
+                // Decrypt and write
+                crypto::decrypt_file(&storage_path, &comp.dest_path, pwd)
+            } else {
+                Err(anyhow::anyhow!("No password for encrypted file"))
+            }
+        } else {
+            // Copy plaintext
+            fs::copy(&storage_path, &comp.dest_path)
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        };
+
+        match restore_result {
             Ok(_) => {
-                println!("✓");
+                let enc_marker = if comp.encrypted { " [decrypted]" } else { "" };
+                println!("✓{}", enc_marker);
                 restored += 1;
             }
             Err(e) => {
                 println!("❌ {}", e);
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                if e.to_string().contains("Permission denied") {
                     println!("   💡 Try running with sudo for system files");
                 }
                 errors += 1;

@@ -1,4 +1,4 @@
-.TH DOTMATRIX 1 "March 2026" "dotmatrix 0.4.2" "User Commands"
+.TH DOTMATRIX 1 "March 2026" "dotmatrix 0.5.0" "User Commands"
 .SH NAME
 dotmatrix \- dotfile management and versioning tool
 .SH SYNOPSIS
@@ -11,6 +11,9 @@ dotmatrix \- dotfile management and versioning tool
 is a cross-platform dotfile management tool that indexes configuration files where they live,
 without using symlinks. It provides version control through git integration
 and supports two backup modes: incremental (content-addressed) and archive (tarballs).
+.PP
+Supports per-file encryption using the age standard for sensitive files like SSH configs
+and credentials.
 .PP
 Works on Linux, macOS, and Windows.
 .SH GLOBAL OPTIONS
@@ -61,11 +64,31 @@ Scan all tracked files and update the index with current metadata (hash, size, m
 .TP
 .BR \-y ", " \-\-yes
 Auto-confirm cleanup of orphaned entries.
-.SS backup [\fB\-m\fR \fImessage\fR]
+.SS backup [\fIoptions\fR]
 Backup tracked files to storage. Uses incremental or archive mode based on config.
 .TP
 .BR \-m ", " \-\-message " " \fImessage\fR
 Commit message for git (if enabled).
+.TP
+.BR \-\-password\-file " " \fIFILE\fR
+Read encryption password from file. Required for encrypted files in non-interactive mode.
+.TP
+.BR \-\-password\-stdin
+Read encryption password from stdin. Useful for piping from password managers or scripts.
+.PP
+The \fBDOTMATRIX_PASSWORD\fR environment variable can also be used as a fallback.
+.PP
+.RS
+.nf
+# Basic backup
+dotmatrix backup -m "Updated shell config"
+
+# With password for encrypted files
+dotmatrix backup --password-file ~/.dotmatrix-pass
+echo "mypass" | dotmatrix backup --password-stdin
+DOTMATRIX_PASSWORD=secret dotmatrix backup
+.fi
+.RE
 .SS restore [\fIoptions\fR]
 Restore files from backup. Shows comparison view and requires confirmation.
 .TP
@@ -83,6 +106,12 @@ Restore only files matching pattern.
 .TP
 .BR \-c ", " \-\-commit " " \fIhash\fR
 Restore from specific git commit.
+.TP
+.BR \-\-password\-file " " \fIFILE\fR
+Read decryption password from file. Required for encrypted files in non-interactive mode.
+.TP
+.BR \-\-password\-stdin
+Read decryption password from stdin.
 .SS status [\fIoptions\fR]
 Show status of tracked files compared to last backup.
 .TP
@@ -122,6 +151,15 @@ View file contents with syntax highlighting (works in all tabs)
 .TP
 .B b
 Run backup (Tracked Files tab)
+.TP
+.B p
+Pull from git remote (Tracked Files tab)
+.TP
+.B P
+Push to git remote (Tracked Files tab)
+.TP
+.B U
+Set git remote URL (Tracked Files tab)
 .TP
 .B Right/l
 Expand folder (Tracked Files) / Enter directory (Add Files)
@@ -207,6 +245,91 @@ Local file differs from backup
 .B OK
 Matches backup
 .RE
+.SS gui
+Launch native graphical user interface. Same features as TUI with mouse support.
+.PP
+On Windows, use \fBdmgui.exe\fR for a console-free experience.
+.SH ENCRYPTION
+Files can be encrypted before backup by adding \fBencrypted = true\fR to the pattern:
+.PP
+.RS
+.nf
+tracked_files = [
+    "~/.bashrc",
+    { path = "~/.ssh/config", encrypted = true },
+    { path = "~/.aws/credentials", encrypted = true },
+    { path = "~/.gnupg/**", encrypted = true },
+]
+.fi
+.RE
+.PP
+Encryption uses the \fBage\fR standard (age-encryption.org), making backups compatible
+with the \fBage\fR CLI tool for manual decryption if needed.
+.SS Interactive Mode (TUI/GUI)
+You will be prompted for a password when backing up or restoring encrypted files.
+.SS Non-Interactive Mode (CLI/Scripts/Cron)
+Provide the password using one of these methods (in priority order):
+.TP
+.B 1. --password-stdin
+Read from stdin. Good for scripts and password managers.
+.RS
+.nf
+echo "mypassword" | dotmatrix backup --password-stdin
+pass show dotmatrix | dotmatrix backup --password-stdin
+.fi
+.RE
+.TP
+.B 2. --password-file FILE
+Read from a file. Recommended for cron jobs.
+.RS
+.nf
+dotmatrix backup --password-file ~/.dotmatrix-pass
+# Make sure to restrict permissions:
+chmod 600 ~/.dotmatrix-pass
+.fi
+.RE
+.TP
+.B 3. DOTMATRIX_PASSWORD environment variable
+Fallback option.
+.RS
+.nf
+export DOTMATRIX_PASSWORD="mypassword"
+dotmatrix backup
+.fi
+.RE
+.SS Example Cron Job
+.PP
+.RS
+.nf
+# Daily backup at 2am
+0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Scheduled backup"
+.fi
+.RE
+.SH GIT SYNC
+Backups can be synced to a remote git repository using push/pull.
+.SS Configuration
+Add \fBgit_remote_url\fR to your config.toml:
+.PP
+.RS
+.nf
+git_remote_url = "https://github.com/user/dotfiles.git"
+# or
+git_remote_url = "git@github.com:user/dotfiles.git"
+.fi
+.RE
+.SS TUI Key Bindings
+.TP
+.B p
+Pull from remote
+.TP
+.B P
+Push to remote
+.TP
+.B U
+Set or change remote URL
+.SS GUI
+Use the Pull/Push buttons in the status bar. If no remote is configured,
+a "Set Remote..." button appears instead.
 .SH CONFIGURATION
 Configuration is stored in the config directory (see FILES section):
 .PP
@@ -215,6 +338,9 @@ Configuration is stored in the config directory (see FILES section):
 # Optional: Custom backup location
 # data_dir = "~/Dropbox/dotmatrix"
 
+# Git remote for sync
+# git_remote_url = "https://github.com/user/dotfiles.git"
+
 git_enabled = true
 backup_mode = "incremental"  # or "archive"
 
@@ -222,6 +348,8 @@ tracked_files = [
     "~/.bashrc",
     "~/.config/nvim/**",
     "~/.config/dotmatrix/*",
+    # Encrypted files
+    { path = "~/.ssh/config", encrypted = true },
 ]
 
 exclude = [
@@ -273,12 +401,18 @@ Content-addressed backup storage (incremental mode).
 .I archives/
 Tarball backup storage (archive mode).
 .TP
+.I README.md
+Auto-generated backup summary with commit history.
+.TP
 .I .git/
 Git repository for version control.
 .SS Other
 .TP
 .I ~/.dotmatrix-restore-backup-*/
 Safety backups created before restore operations.
+.TP
+.I ~/.dotmatrix-pass
+Suggested location for password file (remember to chmod 600).
 .SH PATTERN MATCHING
 .B dotmatrix
 supports glob patterns for file matching:
@@ -317,6 +451,37 @@ dotmatrix status
 dotmatrix restore
 .fi
 .RE
+.SS Encrypted files
+.PP
+.RS
+.nf
+# In config.toml:
+tracked_files = [
+    { path = "~/.ssh/config", encrypted = true },
+]
+
+# Interactive backup (prompts for password)
+dotmatrix tui
+
+# Scripted backup with password file
+dotmatrix backup --password-file ~/.dotmatrix-pass
+
+# Restore encrypted files
+dotmatrix restore --password-file ~/.dotmatrix-pass
+.fi
+.RE
+.SS Automated backups with cron
+.PP
+.RS
+.nf
+# Create password file
+echo "your-secure-password" > ~/.dotmatrix-pass
+chmod 600 ~/.dotmatrix-pass
+
+# Add to crontab (crontab -e)
+0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Daily backup"
+.fi
+.RE
 .SS Preview restore changes
 .PP
 .RS
@@ -331,6 +496,22 @@ dotmatrix restore --dry-run --diff
 # In config.toml:
 data_dir = "D:/Backups/dotmatrix"  # Windows
 data_dir = "~/Dropbox/dotmatrix"   # Sync via cloud
+.fi
+.RE
+.SS Git sync
+.PP
+.RS
+.nf
+# In config.toml:
+git_remote_url = "git@github.com:user/dotfiles.git"
+
+# Or set via TUI (press U)
+
+# Push backups to remote
+dotmatrix tui  # then press P
+
+# Pull from remote (e.g., on new machine)
+dotmatrix tui  # then press p
 .fi
 .RE
 .SS Verbose output
@@ -350,7 +531,8 @@ Success.
 Error occurred.
 .SH SEE ALSO
 .BR git (1),
-.BR rsync (1)
+.BR rsync (1),
+.BR age (1)
 .SH BUGS
 Report bugs at: https://github.com/Woofson/dotmatrix/issues
 .SH AUTHOR

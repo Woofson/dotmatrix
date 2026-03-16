@@ -10,6 +10,8 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 
 - **Index in place**: Track dotfiles where they live, no symlinks needed
 - **Cross-platform**: Works on Linux, macOS, and Windows
+- **Per-file encryption**: Encrypt sensitive files (SSH, credentials) using [age](https://age-encryption.org)
+- **Git sync**: Push/pull backups to remote repositories
 - **Configurable storage**: Custom backup location via `data_dir` in config
 - **Git-based versioning**: Full history of your dotfiles with commit messages
 - **Pattern matching**: Track entire directories or specific file patterns
@@ -21,6 +23,7 @@ Named after Dot Matrix from Spaceballs, because managing dotfiles should be as r
 - **Interactive TUI**: Browse, backup, and restore with keyboard navigation
 - **Native GUI**: Modern graphical interface with mouse support
 - **CLI first**: Power user friendly with clean command structure
+- **Automation-ready**: Password file and stdin support for cron/scripts
 
 ## Installation
 
@@ -101,6 +104,9 @@ tracked_files = [
     "~/.config/dotmatrix/*",  # Track dotmatrix's own config
     # Override mode per pattern
     { path = "~/.config/nvim/**", mode = "archive" },
+    # Encrypt sensitive files
+    { path = "~/.ssh/config", encrypted = true },
+    { path = "~/.aws/credentials", encrypted = true },
 ]
 
 exclude = [
@@ -108,7 +114,55 @@ exclude = [
     "**/.DS_Store",
     "**/node_modules/**",
 ]
+
+# Git remote for sync (optional)
+git_remote_url = "https://github.com/username/dotfiles.git"
 ```
+
+### Encryption
+
+Files marked with `encrypted = true` are encrypted using the [age](https://age-encryption.org) standard before being stored. This is ideal for sensitive files like SSH configs, API keys, and credentials.
+
+```toml
+tracked_files = [
+    { path = "~/.ssh/config", encrypted = true },
+    { path = "~/.gnupg/**", encrypted = true },
+    { path = "~/.aws/credentials", encrypted = true },
+]
+```
+
+**Interactive mode (TUI/GUI):** You'll be prompted for a password.
+
+**CLI/Scripts/Cron:** Provide password via one of:
+```bash
+# Option 1: Password file (recommended for cron)
+dotmatrix backup --password-file ~/.dotmatrix-pass
+# Remember: chmod 600 ~/.dotmatrix-pass
+
+# Option 2: Stdin (good for scripts)
+echo "mypassword" | dotmatrix backup --password-stdin
+pass show dotmatrix | dotmatrix backup --password-stdin
+
+# Option 3: Environment variable (fallback)
+export DOTMATRIX_PASSWORD="mypassword"
+dotmatrix backup
+```
+
+**Example cron job:**
+```bash
+0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Daily backup"
+```
+
+### Git Sync
+
+Sync backups to a remote repository:
+
+```toml
+git_remote_url = "git@github.com:username/dotfiles.git"
+```
+
+- **TUI:** Press `p` to pull, `P` to push, `U` to set remote URL
+- **GUI:** Use Pull/Push buttons in status bar
 
 ### Backup Modes
 
@@ -147,6 +201,14 @@ Patterns can override the default mode by using the object syntax with `path` an
 | `tui` | Launch interactive TUI |
 | `gui` | Launch graphical interface |
 
+### Backup Options
+
+```bash
+dotmatrix backup -m "Updated configs"     # With commit message
+dotmatrix backup --password-file ~/.pass  # For encrypted files
+dotmatrix backup --password-stdin         # Read password from stdin
+```
+
 ### Global Flags
 
 - `-v, --verbose`: Increase verbosity (`-v` for verbose, `-vv` for debug)
@@ -161,6 +223,10 @@ dotmatrix restore --dry-run    # Preview only, no changes
 dotmatrix restore --diff       # Show file diffs
 dotmatrix restore --yes        # Auto-confirm (still creates safety backup)
 dotmatrix restore --file .bashrc  # Restore specific file
+
+# For encrypted files:
+dotmatrix restore --password-file ~/.dotmatrix-pass
+dotmatrix restore --password-stdin
 
 # For distro-hopping or different environments:
 dotmatrix restore --extract-to ~/restored  # Extract to a directory
@@ -196,6 +262,9 @@ dotmatrix tui
 | `Tab` | Next tab |
 | `v` | View file or folder contents (syntax highlighted) |
 | `b` | Run backup (Tracked Files tab) |
+| `p` | Pull from git remote |
+| `P` | Push to git remote |
+| `U` | Set git remote URL |
 | `Right/l` | Expand folder / Enter directory |
 | `Left/h` | Collapse folder / Parent directory |
 | `Enter` | Add file / Select backup / Restore |

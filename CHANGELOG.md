@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Config example: `{ path = "~/.ssh/config", encrypted = true }`
   - Password prompt in TUI and GUI before backup/restore of encrypted files
   - Uses age-encryption.org standard (compatible with `age` CLI tool)
+- **CLI password options for scripting/cron:**
+  - `--password-stdin`: Read password from stdin (e.g., `echo "pass" | dotmatrix backup --password-stdin`)
+  - `--password-file FILE`: Read password from a file (e.g., `dotmatrix backup --password-file ~/.dotmatrix-pass`)
+  - `DOTMATRIX_PASSWORD` environment variable as fallback
+  - Priority order: stdin > file > environment variable
 - **Git sync:** Push and pull backups to/from remote repositories
   - New `git_remote_url` config option for remote URL
   - TUI: `p` to pull, `P` to push, `U` to set remote URL
