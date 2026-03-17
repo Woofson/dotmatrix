@@ -174,6 +174,7 @@ pub struct RestoreFile {
     pub size: u64,
     pub exists_locally: bool,
     pub local_differs: bool,  // True if local file has different hash
+    pub encrypted: bool,      // True if file was encrypted during backup
 }
 
 /// Result from background backup operation
@@ -430,6 +431,7 @@ impl App {
                             size: entry.size,
                             exists_locally,
                             local_differs,
+                            encrypted: entry.encrypted,
                         });
                     }
 
@@ -476,6 +478,16 @@ impl App {
             return;
         }
 
+        // Check if any files to restore are encrypted
+        let needs_password = indices.iter().any(|&i| {
+            self.restore_files.get(i).map(|f| f.encrypted).unwrap_or(false)
+        });
+
+        if needs_password && self.encryption_password.is_none() {
+            self.show_password_prompt(PasswordPurpose::Restore);
+            return;
+        }
+
         let storage_path = match crate::get_storage_path() {
             Ok(p) => p,
             Err(e) => {
@@ -513,8 +525,20 @@ impl App {
                 }
             }
 
-            // Copy from storage to destination
-            match fs::copy(&backup_path, &file.path) {
+            // Restore file (decrypt if encrypted)
+            let result = if file.encrypted {
+                if let Some(ref password) = self.encryption_password {
+                    crate::crypto::decrypt_file(&backup_path, &file.path, password)
+                } else {
+                    Err(anyhow::anyhow!("No password for encrypted file"))
+                }
+            } else {
+                fs::copy(&backup_path, &file.path)
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!("{}", e))
+            };
+
+            match result {
                 Ok(_) => restored += 1,
                 Err(_) => errors += 1,
             }
