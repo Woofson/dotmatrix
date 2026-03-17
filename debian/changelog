@@ -1,3 +1,22 @@
+dotmatrix (0.5.1-1) unstable; urgency=medium
+
+  * TUI/GUI: Add encryption toggle (X key)
+  * TUI/GUI: Add backup mode toggle (M key)
+  * TUI/GUI: Add save and reload (S key)
+  * Simplified status bar, updated help screens
+  * Move restore backups to data directory
+
+ -- Woofson <https://github.com/Woofson>  Mon, 17 Mar 2026 12:00:00 +0000
+
+dotmatrix (0.5.0-1) unstable; urgency=medium
+
+  * Per-file encryption using age standard
+  * Git sync: push/pull to remote repositories
+  * CLI password options for scripting/cron
+  * Auto-generated README.md in backup repo
+
+ -- Woofson <https://github.com/Woofson>  Sun, 16 Mar 2026 12:00:00 +0000
+
 dotmatrix (0.4.2-1) unstable; urgency=medium
 
   * New upstream release
