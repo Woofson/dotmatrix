@@ -1966,6 +1966,67 @@ impl App {
         self.refresh_files();
     }
 
+    /// Toggle backup mode for the selected file's pattern (Status tab only)
+    /// Cycles: Incremental -> Archive -> (default) -> Incremental
+    pub fn toggle_backup_mode(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+
+        let Some(idx) = self.list_state.selected() else {
+            return;
+        };
+
+        let Some(file) = self.files.get(idx) else {
+            return;
+        };
+
+        // Skip folder nodes
+        if file.is_folder_node {
+            self.message = Some("Select a file to toggle backup mode".to_string());
+            return;
+        }
+
+        let file_path = file.path.clone();
+        let display_path = self.display_path(&file_path);
+
+        // Find the matching pattern and cycle its mode
+        let mut toggled = false;
+        for pattern in self.config.tracked_files.iter_mut().rev() {
+            if let Ok(expanded) = scanner::expand_tilde(pattern.path()) {
+                if file_path.starts_with(&expanded) || file_path == expanded {
+                    let current_mode = pattern.mode();
+                    let new_mode = match current_mode {
+                        None => Some(BackupMode::Archive),  // default -> Archive
+                        Some(BackupMode::Incremental) => Some(BackupMode::Archive),
+                        Some(BackupMode::Archive) => None,  // Archive -> default (Incremental)
+                    };
+                    pattern.set_mode(new_mode);
+                    self.config_dirty = true;
+
+                    let mode_name = match new_mode {
+                        Some(BackupMode::Incremental) => "Incremental",
+                        Some(BackupMode::Archive) => "Archive",
+                        None => "default (Incremental)",
+                    };
+                    self.message = Some(format!(
+                        "Backup mode: {} for {}",
+                        mode_name, display_path
+                    ));
+                    toggled = true;
+                    break;
+                }
+            }
+        }
+
+        if !toggled {
+            self.message = Some("No matching pattern found".to_string());
+            return;
+        }
+
+        self.refresh_files();
+    }
+
     /// Show password prompt for encryption
     pub fn show_password_prompt(&mut self, purpose: PasswordPurpose) {
         self.password_purpose = purpose;

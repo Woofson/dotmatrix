@@ -133,6 +133,31 @@ impl TrackedPattern {
             }
         }
     }
+
+    /// Set the backup mode, converting Simple to WithOptions if needed
+    pub fn set_mode(&mut self, new_mode: Option<BackupMode>) {
+        match self {
+            TrackedPattern::Simple(path) => {
+                if new_mode.is_some() {
+                    // Convert to WithOptions to set explicit mode
+                    *self = TrackedPattern::WithOptions {
+                        path: path.clone(),
+                        mode: new_mode,
+                        encrypted: false,
+                    };
+                }
+                // If None, keep as Simple (uses default mode)
+            }
+            TrackedPattern::WithOptions { mode, encrypted, path } => {
+                if new_mode.is_none() && !*encrypted {
+                    // Convert back to Simple if no special options
+                    *self = TrackedPattern::Simple(path.clone());
+                } else {
+                    *mode = new_mode;
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for TrackedPattern {

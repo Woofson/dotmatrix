@@ -505,6 +505,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         app.toggle_encryption();
                     }
                 }
+                KeyCode::Char('M') => {
+                    // Toggle backup mode for selected file (Status tab only)
+                    if app.mode == TuiMode::Status {
+                        app.toggle_backup_mode();
+                    }
+                }
                 KeyCode::Char('S') => {
                     // Save config/index and reload
                     app.save_and_reload();
@@ -1148,12 +1154,17 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("           Set remote URL"),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  ENCRYPTION (Status tab)", header_style)),
-        Line::from(Span::styled("  =======================", dim_style)),
+        Line::from(Span::styled("  FILE OPTIONS (Status tab)", header_style)),
+        Line::from(Span::styled("  =========================", dim_style)),
         Line::from(vec![
             Span::raw("  "),
             Span::styled("X", key_style),
-            Span::raw("           Toggle encryption for file"),
+            Span::raw("           Toggle encryption [E]"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("M", key_style),
+            Span::raw("           Toggle backup mode [I]/[A]"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  ADD FILES TAB", header_style)),

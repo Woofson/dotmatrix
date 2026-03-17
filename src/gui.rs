@@ -441,6 +441,7 @@ impl GuiApp {
         let mut action_expand_folder = false;
         let mut action_collapse_folder = false;
         let mut action_toggle_encryption = false;
+        let mut action_toggle_backup_mode = false;
 
         ScrollArea::vertical()
             .id_salt("status_tab_scroll")
@@ -595,6 +596,14 @@ impl GuiApp {
                                 action_toggle_encryption = true;
                                 ui.close_menu();
                             }
+                            let mode_label = match file.backup_mode {
+                                Some(BackupMode::Archive) => "Switch to Incremental",
+                                _ => "Switch to Archive",
+                            };
+                            if ui.button(mode_label).clicked() {
+                                action_toggle_backup_mode = true;
+                                ui.close_menu();
+                            }
                             ui.separator();
                             if ui.button("Remove from Tracking").clicked() {
                                 action_remove_tracking = true;
@@ -631,6 +640,9 @@ impl GuiApp {
         }
         if action_toggle_encryption {
             self.app.toggle_encryption();
+        }
+        if action_toggle_backup_mode {
+            self.app.toggle_backup_mode();
         }
         if action_remove_tracking {
             self.app.toggle_tracking();
