@@ -435,6 +435,7 @@ impl GuiApp {
         let mut action_remove_tracking = false;
         let mut action_expand_folder = false;
         let mut action_collapse_folder = false;
+        let mut action_toggle_encryption = false;
 
         ScrollArea::vertical()
             .id_salt("status_tab_scroll")
@@ -492,6 +493,12 @@ impl GuiApp {
                         ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, expand_icon, font.clone(), Colors::BLUE);
                         x += 16.0;
 
+                        // Encryption indicator for folders
+                        if file.encrypted {
+                            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, "[E] ", font.clone(), Colors::MAGENTA);
+                            x += 32.0;
+                        }
+
                         ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, &file.display_path, font.clone(), Colors::BLUE);
                         x += file.display_path.len() as f32 * 8.0 + 8.0;
 
@@ -522,6 +529,12 @@ impl GuiApp {
                             None => "   ",
                         };
                         ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, mode_str, font.clone(), Colors::BLUE);
+                        x += 28.0;
+
+                        // Encryption indicator
+                        let enc_str = if file.encrypted { "[E]" } else { "   " };
+                        let enc_color = if file.encrypted { Colors::MAGENTA } else { Colors::DARK_GRAY };
+                        ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, enc_str, font.clone(), enc_color);
                         x += 28.0;
 
                         let file_color = if file.is_tracked { Colors::WHITE } else { Colors::DARK_GRAY };
@@ -572,6 +585,12 @@ impl GuiApp {
                                 ui.close_menu();
                             }
                             ui.separator();
+                            let enc_label = if file.encrypted { "Disable Encryption" } else { "Enable Encryption" };
+                            if ui.button(enc_label).clicked() {
+                                action_toggle_encryption = true;
+                                ui.close_menu();
+                            }
+                            ui.separator();
                             if ui.button("Remove from Tracking").clicked() {
                                 action_remove_tracking = true;
                                 ui.close_menu();
@@ -604,6 +623,9 @@ impl GuiApp {
         }
         if action_backup {
             self.app.perform_backup(None);
+        }
+        if action_toggle_encryption {
+            self.app.toggle_encryption();
         }
         if action_remove_tracking {
             self.app.toggle_tracking();

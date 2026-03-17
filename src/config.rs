@@ -108,6 +108,31 @@ impl TrackedPattern {
     pub fn matches_path(&self, path: &str) -> bool {
         self.path() == path
     }
+
+    /// Set the encrypted flag, converting Simple to WithOptions if needed
+    pub fn set_encrypted(&mut self, encrypted: bool) {
+        match self {
+            TrackedPattern::Simple(path) => {
+                if encrypted {
+                    // Convert to WithOptions to enable encryption
+                    *self = TrackedPattern::WithOptions {
+                        path: path.clone(),
+                        mode: None,
+                        encrypted: true,
+                    };
+                }
+                // If not encrypted, keep as Simple (default is unencrypted)
+            }
+            TrackedPattern::WithOptions { encrypted: enc, mode, path } => {
+                if !encrypted && mode.is_none() {
+                    // Convert back to Simple if no special options
+                    *self = TrackedPattern::Simple(path.clone());
+                } else {
+                    *enc = encrypted;
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for TrackedPattern {

@@ -497,6 +497,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         app.show_remote_dialog();
                     }
                 }
+                KeyCode::Char('X') => {
+                    // Toggle encryption for selected file (Status tab only)
+                    if app.mode == TuiMode::Status {
+                        app.toggle_encryption();
+                    }
+                }
                 _ => {}
             }
         }
@@ -639,6 +645,7 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
                         String::new()
                     };
                     let stats = format!("{}{}{})", count_str, mod_str, new_str);
+                    let enc_indicator = if file.encrypted { "[E] " } else { "" };
 
                     let line = Line::from(vec![
                         Span::raw(format!("{} ", selected_marker)),
@@ -649,6 +656,10 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
                         Span::styled(
                             format!("{} ", expand_icon),
                             Style::default().fg(Color::Blue),
+                        ),
+                        Span::styled(
+                            enc_indicator,
+                            Style::default().fg(Color::Magenta),
                         ),
                         Span::styled(
                             file.display_path.clone(),
@@ -671,6 +682,7 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
                     Some(BackupMode::Incremental) => "[I]",
                     None => "   ",
                 };
+                let enc_indicator = if file.encrypted { "[E]" } else { "   " };
 
                 let size_str = file
                     .size
@@ -683,7 +695,12 @@ fn render_file_list(f: &mut Frame, area: Rect, app: &App) {
                         format!("{} ", status_symbol),
                         Style::default().fg(file.status.color()),
                     ),
-                    Span::raw(format!("{}{} ", indent, mode_indicator)),
+                    Span::raw(format!("{}{}", indent, mode_indicator)),
+                    Span::styled(
+                        enc_indicator,
+                        Style::default().fg(Color::Magenta),
+                    ),
+                    Span::raw(" "),
                     Span::styled(
                         file.display_path.clone(),
                         Style::default().fg(if file.is_tracked {
@@ -1113,6 +1130,14 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("  "),
             Span::styled("U", key_style),
             Span::raw("           Set remote URL"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  ENCRYPTION (Status tab)", header_style)),
+        Line::from(Span::styled("  =======================", dim_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("X", key_style),
+            Span::raw("           Toggle encryption for file"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  ADD FILES TAB", header_style)),

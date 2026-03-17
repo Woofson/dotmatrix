@@ -72,6 +72,7 @@ pub struct DisplayFile {
     pub is_tracked: bool,
     pub backup_mode: Option<BackupMode>,
     pub is_dir: bool,
+    pub encrypted: bool,        // Whether file is marked for encryption
     // Tree view fields (for Status tab)
     pub depth: usize,           // Indentation level in tree
     pub is_folder_node: bool,   // True if this is a virtual folder node
@@ -592,6 +593,7 @@ impl App {
 
             let size = fs::metadata(file).map(|m| m.len()).ok();
             let backup_mode = self.get_file_mode(file);
+            let encrypted = self.is_file_encrypted(file);
 
             all_files.push(DisplayFile {
                 path: file.clone(),
@@ -602,6 +604,7 @@ impl App {
                 is_tracked: true,
                 backup_mode: Some(backup_mode),
                 is_dir: false,
+                encrypted,
                 depth: 0,
                 is_folder_node: false,
                 child_count: 0,
@@ -622,6 +625,7 @@ impl App {
                     is_tracked: true,
                     backup_mode: None,
                     is_dir: false,
+                    encrypted: entry.encrypted,
                     depth: 0,
                     is_folder_node: false,
                     child_count: 0,
@@ -658,6 +662,7 @@ impl App {
             let child_count = files.len();
             let modified_count = files.iter().filter(|f| f.status == FileStatus::Modified).count();
             let new_count = files.iter().filter(|f| f.status == FileStatus::New).count();
+            let has_encrypted = files.iter().any(|f| f.encrypted);
 
             // Create folder display name
             let folder_display = self.display_path(&folder_path);
@@ -676,6 +681,7 @@ impl App {
                 is_tracked: true,
                 backup_mode: None,
                 is_dir: true,
+                encrypted: has_encrypted,
                 depth: 0,
                 is_folder_node: true,
                 child_count,
@@ -866,6 +872,12 @@ impl App {
                 fs::metadata(&path).map(|m| m.len()).ok()
             };
 
+            let encrypted = if is_tracked {
+                self.is_file_encrypted(&path)
+            } else {
+                false
+            };
+
             self.files.push(DisplayFile {
                 path: path.clone(),
                 display_path: display,
@@ -879,6 +891,7 @@ impl App {
                 is_tracked,
                 backup_mode: None,
                 is_dir,
+                encrypted,
                 depth: 0,
                 is_folder_node: false,
                 child_count: 0,
@@ -1829,6 +1842,58 @@ impl App {
             }
         }
         false
+    }
+
+    /// Toggle encryption for the selected file's pattern (Status tab only)
+    pub fn toggle_encryption(&mut self) {
+        if self.mode != TuiMode::Status {
+            return;
+        }
+
+        let Some(idx) = self.list_state.selected() else {
+            return;
+        };
+
+        let Some(file) = self.files.get(idx) else {
+            return;
+        };
+
+        // Skip folder nodes - they don't have a single pattern
+        if file.is_folder_node {
+            self.message = Some("Select a file to toggle encryption".to_string());
+            return;
+        }
+
+        let file_path = file.path.clone();
+        let display_path = self.display_path(&file_path);
+
+        // Find the matching pattern and toggle its encryption
+        let mut toggled = false;
+        for pattern in self.config.tracked_files.iter_mut().rev() {
+            if let Ok(expanded) = scanner::expand_tilde(pattern.path()) {
+                if file_path.starts_with(&expanded) || file_path == expanded {
+                    let was_encrypted = pattern.encrypted();
+                    pattern.set_encrypted(!was_encrypted);
+                    self.config_dirty = true;
+
+                    let new_state = if was_encrypted { "disabled" } else { "enabled" };
+                    self.message = Some(format!(
+                        "Encryption {} for {} (saves on exit)",
+                        new_state, display_path
+                    ));
+                    toggled = true;
+                    break;
+                }
+            }
+        }
+
+        if !toggled {
+            self.message = Some("No matching pattern found".to_string());
+            return;
+        }
+
+        // Refresh to update display
+        self.refresh_files();
     }
 
     /// Show password prompt for encryption
