@@ -1026,7 +1026,7 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("       = Deleted from your system"),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  MODE INDICATORS", header_style)),
+        Line::from(Span::styled("  FILE INDICATORS", header_style)),
         Line::from(Span::styled("  ===============", dim_style)),
         Line::from(vec![
             Span::raw("  "),
@@ -1035,8 +1035,13 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
         ]),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("[A]", Style::default().fg(Color::Magenta)),
+            Span::styled("[A]", Style::default().fg(Color::Blue)),
             Span::raw("    = Archive backup (compressed tarball)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[E]", Style::default().fg(Color::Magenta)),
+            Span::raw("    = Encrypted (requires password for backup/restore)"),
         ]),
         Line::from(""),
         Line::from(Span::styled("  NAVIGATION", header_style)),
@@ -1455,26 +1460,28 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         let selected_count = app.selected.len();
 
         // Get total count based on current mode/view
-        let (total, mode_hint) = match app.mode {
-            TuiMode::Status => (app.files.len(), "Right: expand | Left: collapse | b: backup | d: remove | v: view"),
+        let total = match app.mode {
+            TuiMode::Status => app.files.len(),
             TuiMode::Browse => {
                 match app.restore_view {
-                    RestoreView::Commits => (app.commits.len(), "Enter: select backup"),
-                    RestoreView::Files => (app.restore_files.len(), "Enter: restore | Backspace: back"),
+                    RestoreView::Commits => app.commits.len(),
+                    RestoreView::Files => app.restore_files.len(),
                 }
             }
-            TuiMode::Add => (app.files.len(), "Enter: add/open | A: folder | R: recursive | d: untrack"),
+            TuiMode::Add => app.files.len(),
         };
 
+        // Simplified status bar - reference help for all shortcuts
+        let dirty_indicator = if app.config_dirty || app.index_dirty { "*" } else { "" };
         let msg = if selected_count > 0 {
             format!(
-                " {} selected | {} total | {} | Tab: switch tab | ?: help | q: quit",
-                selected_count, total, mode_hint
+                " {} selected | {} total | Tab: tabs | S: save{} | ?: help | q: quit",
+                selected_count, total, dirty_indicator
             )
         } else {
             format!(
-                " {} items | {} | Tab: switch tab | ?: help | q: quit",
-                total, mode_hint
+                " {} items | Tab: tabs | S: save{} | ?: help | q: quit",
+                total, dirty_indicator
             )
         };
         (msg, Style::default().fg(Color::Cyan))

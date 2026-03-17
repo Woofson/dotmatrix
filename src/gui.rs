@@ -1389,15 +1389,20 @@ impl GuiApp {
                     ui.horizontal(|ui| { ui.label(RichText::new("-").color(Colors::DARK_GRAY)); ui.label("= Deleted from your system"); });
                     ui.add_space(10.0);
 
-                    ui.label(RichText::new("NAVIGATION").color(Colors::YELLOW).strong());
-                    ui.horizontal(|ui| { ui.label(RichText::new("j/Down").color(Colors::CYAN)); ui.label("Move down"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("k/Up").color(Colors::CYAN)); ui.label("Move up"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("Tab").color(Colors::CYAN)); ui.label("Next tab"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("Shift+Tab").color(Colors::CYAN)); ui.label("Previous tab"); });
+                    ui.label(RichText::new("FILE INDICATORS").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("[I]").color(Colors::BLUE)); ui.label("= Incremental backup (content-addressed)"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("[A]").color(Colors::BLUE)); ui.label("= Archive backup (compressed tarball)"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("[E]").color(Colors::MAGENTA)); ui.label("= Encrypted (requires password)"); });
+                    ui.add_space(10.0);
+
+                    ui.label(RichText::new("KEYBOARD SHORTCUTS").color(Colors::YELLOW).strong());
+                    ui.horizontal(|ui| { ui.label(RichText::new("j/k").color(Colors::CYAN)); ui.label("Move down/up"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("Tab").color(Colors::CYAN)); ui.label("Switch tabs"); });
                     ui.horizontal(|ui| { ui.label(RichText::new("Space").color(Colors::CYAN)); ui.label("Toggle selection"); });
                     ui.horizontal(|ui| { ui.label(RichText::new("v").color(Colors::CYAN)); ui.label("View file contents"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("q/Esc").color(Colors::CYAN)); ui.label("Close dialog / Go back"); });
-                    ui.horizontal(|ui| { ui.label(RichText::new("Ctrl+Q").color(Colors::CYAN)); ui.label("Quit (saves changes)"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("S").color(Colors::CYAN)); ui.label("Save and reload"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("?").color(Colors::CYAN)); ui.label("Show this help"); });
+                    ui.horizontal(|ui| { ui.label(RichText::new("q / Ctrl+Q").color(Colors::CYAN)); ui.label("Quit (saves changes)"); });
                     ui.add_space(10.0);
 
                     ui.label(RichText::new("TRACKED FILES TAB").color(Colors::YELLOW).strong());
@@ -1485,17 +1490,17 @@ impl GuiApp {
             ui.label(RichText::new(format!("v{}", version)).color(Colors::DARK_GRAY));
             ui.separator();
 
-            // Always show mode-specific action buttons (unless busy)
+            // Mode-specific action buttons (unless busy)
             if !self.app.busy {
                 match self.app.mode {
                     TuiMode::Status => {
-                        if ui.button("Backup (b)").clicked() {
+                        if ui.button("Backup").clicked() {
                             self.app.perform_backup(None);
                         }
-                        if ui.button("Remove (d)").clicked() {
+                        if ui.button("Remove").clicked() {
                             self.app.toggle_tracking();
                         }
-                        if ui.button("View (v)").clicked() {
+                        if ui.button("View").clicked() {
                             self.app.open_viewer();
                         }
                         ui.separator();
@@ -1520,25 +1525,25 @@ impl GuiApp {
                         }
                     }
                     TuiMode::Add => {
-                        if ui.button("Add (Enter)").clicked() {
+                        if ui.button("Add").clicked() {
                             self.app.toggle_tracking();
                         }
-                        if ui.button("Folder (A)").clicked() {
+                        if ui.button("Add Folder").clicked() {
                             self.app.add_folder_pattern();
                         }
-                        if ui.button("Recursive (R)").clicked() {
+                        if ui.button("Recursive...").clicked() {
                             self.app.start_recursive_preview();
                         }
                     }
                     TuiMode::Browse => {
                         match self.app.restore_view {
                             RestoreView::Commits => {
-                                if ui.button("Select (Enter)").clicked() {
+                                if ui.button("Select").clicked() {
                                     self.app.select_commit();
                                 }
                             }
                             RestoreView::Files => {
-                                if ui.button("Restore (Enter)").clicked() {
+                                if ui.button("Restore").clicked() {
                                     self.app.perform_restore();
                                 }
                                 if ui.button("Back").clicked() {
@@ -1549,12 +1554,12 @@ impl GuiApp {
                     }
                 }
 
-                // Save button (always available)
+                // Save button (always available, shows * when dirty)
                 ui.separator();
                 let save_label = if self.app.config_dirty || self.app.index_dirty {
-                    "Save (S)*"
+                    "Save*"
                 } else {
-                    "Save (S)"
+                    "Save"
                 };
                 if ui.button(save_label).clicked() {
                     self.app.save_and_reload();
@@ -1571,9 +1576,12 @@ impl GuiApp {
                 ui.label(RichText::new(msg).color(Colors::CYAN));
             }
 
-            // Right-aligned: item count, Help button
+            // Right-aligned: item count, Help, Quit
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Help (?)").clicked() {
+                if ui.button("Quit").clicked() {
+                    self.app.should_quit = true;
+                }
+                if ui.button("Help").clicked() {
                     self.app.show_help = true;
                 }
                 ui.separator();
