@@ -1500,9 +1500,11 @@ fn create_restore_backup(files: &[&FileComparison]) -> anyhow::Result<Option<Pat
         return Ok(None);
     }
 
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+    // Store restore backups in the dotmatrix data directory (not home)
+    let data_dir = dotmatrix::get_storage_path()?;
+    let restore_backups_dir = data_dir.join("restore-backups");
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-    let backup_dir = home.join(format!(".dotmatrix-restore-backup-{}", timestamp));
+    let backup_dir = restore_backups_dir.join(timestamp.to_string());
 
     fs::create_dir_all(&backup_dir)?;
 
