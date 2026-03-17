@@ -505,6 +505,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         app.toggle_encryption();
                     }
                 }
+                KeyCode::Char('S') => {
+                    // Save config/index and reload
+                    app.save_and_reload();
+                }
                 _ => {}
             }
         }
@@ -1064,6 +1068,11 @@ fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("           Go to bottom       "),
             Span::styled("q", key_style),
             Span::raw("           Quit (saves changes)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("S", key_style),
+            Span::raw("           Save now and reload"),
         ]),
         Line::from(vec![
             Span::raw("  "),

@@ -354,6 +354,50 @@ impl App {
         Ok(())
     }
 
+    /// Save config/index immediately and reload state
+    pub fn save_and_reload(&mut self) {
+        let mut saved = Vec::new();
+
+        if self.config_dirty {
+            match self.config.save(&self.config_path) {
+                Ok(_) => {
+                    self.config_dirty = false;
+                    saved.push("config");
+                }
+                Err(e) => {
+                    self.message = Some(format!("Failed to save config: {}", e));
+                    return;
+                }
+            }
+        }
+
+        if self.index_dirty {
+            match self.index.save(&self.index_path) {
+                Ok(_) => {
+                    self.index_dirty = false;
+                    saved.push("index");
+                }
+                Err(e) => {
+                    self.message = Some(format!("Failed to save index: {}", e));
+                    return;
+                }
+            }
+        }
+
+        if saved.is_empty() {
+            self.message = Some("Nothing to save".to_string());
+        } else {
+            // Reload config and index from disk
+            if let Ok(config) = Config::load(&self.config_path) {
+                self.config = config;
+            }
+            self.reload_index();
+            self.load_commits();
+            self.refresh_files();
+            self.message = Some(format!("Saved {} and reloaded", saved.join(" and ")));
+        }
+    }
+
     /// Reload index from disk (after external changes like backup)
     pub fn reload_index(&mut self) {
         if let Ok(index) = Index::load(&self.index_path) {

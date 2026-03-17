@@ -188,6 +188,11 @@ impl GuiApp {
                     self.app.select_all();
                 }
 
+                // Save and reload
+                if i.key_pressed(Key::S) && i.modifiers.shift {
+                    self.app.save_and_reload();
+                }
+
                 // Mode-specific actions
                 match self.app.mode {
                     TuiMode::Status => {
@@ -1542,6 +1547,17 @@ impl GuiApp {
                             }
                         }
                     }
+                }
+
+                // Save button (always available)
+                ui.separator();
+                let save_label = if self.app.config_dirty || self.app.index_dirty {
+                    "Save (S)*"
+                } else {
+                    "Save (S)"
+                };
+                if ui.button(save_label).clicked() {
+                    self.app.save_and_reload();
                 }
             }
 
