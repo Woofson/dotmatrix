@@ -262,9 +262,13 @@ dotmatrix tui
 | `Tab` | Next tab |
 | `v` | View file or folder contents (syntax highlighted) |
 | `b` | Run backup (Tracked Files tab) |
+| `B` | Backup with custom message |
 | `p` | Pull from git remote |
 | `P` | Push to git remote |
 | `U` | Set git remote URL |
+| `X` | Toggle encryption `[E]` |
+| `M` | Toggle backup mode `[I]`/`[A]` |
+| `S` | Save and reload (shows `*` when unsaved) |
 | `Right/l` | Expand folder / Enter directory |
 | `Left/h` | Collapse folder / Parent directory |
 | `Enter` | Add file / Select backup / Restore |
@@ -295,6 +299,11 @@ Press `v` on a folder to view all files inside as a single concatenated view. Pe
 - `CHG` = Local file differs from backup
 - `OK` = Matches backup
 
+**File indicators** (Tracked Files tab):
+- `[I]` = Incremental backup mode (content-addressed, deduped)
+- `[A]` = Archive backup mode (compressed tarball)
+- `[E]` = Encrypted (requires password for backup/restore)
+
 ### GUI Mode
 
 Launch the graphical interface:
@@ -321,6 +330,9 @@ Or use the GUI-only binary on Windows (`dmgui.exe`) for a console-free experienc
 | `1/2/3` | Switch to tab |
 | `v` | View file |
 | `b` | Backup |
+| `X` | Toggle encryption `[E]` |
+| `M` | Toggle backup mode `[I]`/`[A]` |
+| `Shift+S` | Save and reload |
 | `?` | Help |
 
 ## Directory Structure
@@ -333,6 +345,7 @@ Or use the GUI-only binary on Windows (`dmgui.exe`) for a console-free experienc
 ├── index.json
 ├── storage/          # Incremental backups (by hash)
 ├── archives/         # Tarball backups
+├── restore-backups/  # Safety backups before restore
 └── .git/
 ```
 

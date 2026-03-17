@@ -191,6 +191,15 @@ Select/deselect all (in recursive preview)
 .B d
 Stop tracking file
 .TP
+.B X
+Toggle encryption for file (shows [E] indicator)
+.TP
+.B M
+Toggle backup mode (Incremental [I] / Archive [A])
+.TP
+.B S
+Save config and reload without quitting
+.TP
 .B ?
 Show help
 .TP
@@ -244,6 +253,19 @@ Local file differs from backup
 .TP
 .B OK
 Matches backup
+.RE
+.PP
+.B File indicators:
+.RS
+.TP
+.B [I]
+Incremental backup mode (content-addressed, deduped)
+.TP
+.B [A]
+Archive backup mode (compressed tarball)
+.TP
+.B [E]
+Encrypted (requires password for backup/restore)
 .RE
 .SS gui
 Launch native graphical user interface. Same features as TUI with mouse support.
@@ -408,7 +430,7 @@ Auto-generated backup summary with commit history.
 Git repository for version control.
 .SS Other
 .TP
-.I ~/.dotmatrix-restore-backup-*/
+.I ~/.local/share/dotmatrix/restore-backups/
 Safety backups created before restore operations.
 .TP
 .I ~/.dotmatrix-pass

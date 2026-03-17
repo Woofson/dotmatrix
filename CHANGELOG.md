@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-17
+
+### TUI/GUI Enhancements
+- **Encryption toggle (X key):** Enable/disable encryption for files directly in Status tab
+  - TUI: Press `X` on selected file
+  - GUI: Right-click → "Enable/Disable Encryption"
+  - Shows `[E]` indicator (magenta) for encrypted files
+- **Backup mode toggle (M key):** Switch between Incremental and Archive modes
+  - TUI: Press `M` on selected file
+  - GUI: Right-click → "Switch to Archive/Incremental"
+  - Shows `[I]` for Incremental, `[A]` for Archive
+- **Save and reload (S key):** Save config/index without quitting
+  - TUI: Press `S` to save and reload
+  - GUI: Press `Shift+S` or click "Save" button
+  - Shows `*` indicator when there are unsaved changes
+- **Simplified status bar:** Cleaner display showing only essential shortcuts
+- **Updated help screens:** Added FILE INDICATORS section documenting `[I]`, `[A]`, `[E]`
+
+### Changed
+- **Restore backups location:** Safety backups now stored in `~/.local/share/dotmatrix/restore-backups/` instead of cluttering home directory with `.dotmatrix-restore-backup-*` folders
+- GUI buttons cleaned up (removed redundant keyboard hints for mouse users)
+- Added Quit button to GUI status bar
+
 ## [0.5.0] - 2026-03-16
 
 ### Added
