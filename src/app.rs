@@ -245,6 +245,7 @@ pub struct App {
     pub password_prompt_visible: bool,
     pub password_input: String,
     pub password_purpose: PasswordPurpose,
+    pub pending_backup_message: Option<String>,
     // Git remote dialog state
     pub remote_dialog_visible: bool,
     pub remote_url_input: String,
@@ -300,6 +301,7 @@ impl App {
             password_prompt_visible: false,
             password_input: String::new(),
             password_purpose: PasswordPurpose::Backup,
+            pending_backup_message: None,
             remote_dialog_visible: false,
             remote_url_input: String::new(),
         };
@@ -2013,10 +2015,20 @@ impl App {
     /// Perform backup of selected or all tracked files (async)
     pub fn perform_backup(&mut self, custom_message: Option<String>) {
         use chrono::Local;
+        use std::io::Write;
+        use std::process::Stdio;
 
         // Don't start another backup if one is already running
         if self.busy {
             self.message = Some("Backup already in progress...".to_string());
+            return;
+        }
+
+        // Check if password is needed for encrypted files
+        if self.has_encrypted_patterns() && self.encryption_password.is_none() {
+            // Store the custom message for after password entry
+            self.pending_backup_message = custom_message;
+            self.show_password_prompt(PasswordPurpose::Backup);
             return;
         }
 
@@ -2070,32 +2082,81 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.backup_receiver = Some(rx);
 
+        // Get password if available (clone for thread)
+        let password = self.encryption_password.as_ref().map(|p| {
+            use age::secrecy::ExposeSecret;
+            p.expose_secret().to_string()
+        });
+
         // Spawn backup thread
         let commit_msg_clone = commit_msg.clone();
         thread::spawn(move || {
-            let output = std::process::Command::new(&exe_path)
-                .args(["backup", "--message", &commit_msg_clone])
-                .output();
-
-            let result = match output {
-                Ok(output) => {
-                    if output.status.success() {
-                        BackupResult {
-                            success: true,
-                            message: format!("Backup complete: {}", commit_msg_clone),
+            let result = if let Some(pwd) = password {
+                // Run with password via stdin
+                match std::process::Command::new(&exe_path)
+                    .args(["backup", "--message", &commit_msg_clone, "--password-stdin"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        // Write password to stdin
+                        if let Some(mut stdin) = child.stdin.take() {
+                            let _ = stdin.write_all(pwd.as_bytes());
                         }
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        BackupResult {
-                            success: false,
-                            message: format!("Backup failed: {}", stderr.trim()),
+
+                        match child.wait_with_output() {
+                            Ok(output) => {
+                                if output.status.success() {
+                                    BackupResult {
+                                        success: true,
+                                        message: format!("Backup complete: {}", commit_msg_clone),
+                                    }
+                                } else {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    BackupResult {
+                                        success: false,
+                                        message: format!("Backup failed: {}", stderr.trim()),
+                                    }
+                                }
+                            }
+                            Err(e) => BackupResult {
+                                success: false,
+                                message: format!("Backup error: {}", e),
+                            },
                         }
                     }
+                    Err(e) => BackupResult {
+                        success: false,
+                        message: format!("Backup spawn error: {}", e),
+                    },
                 }
-                Err(e) => BackupResult {
-                    success: false,
-                    message: format!("Backup error: {}", e),
-                },
+            } else {
+                // Run without password
+                match std::process::Command::new(&exe_path)
+                    .args(["backup", "--message", &commit_msg_clone])
+                    .output()
+                {
+                    Ok(output) => {
+                        if output.status.success() {
+                            BackupResult {
+                                success: true,
+                                message: format!("Backup complete: {}", commit_msg_clone),
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            BackupResult {
+                                success: false,
+                                message: format!("Backup failed: {}", stderr.trim()),
+                            }
+                        }
+                    }
+                    Err(e) => BackupResult {
+                        success: false,
+                        message: format!("Backup error: {}", e),
+                    },
+                }
             };
 
             let _ = tx.send(result);

@@ -1289,7 +1289,8 @@ impl GuiApp {
                         // Continue with the operation that needed the password
                         match self.app.password_purpose {
                             PasswordPurpose::Backup => {
-                                self.app.perform_backup(None);
+                                let msg = self.app.pending_backup_message.take();
+                                self.app.perform_backup(msg);
                             }
                             PasswordPurpose::Restore => {
                                 self.app.perform_restore();
@@ -1298,6 +1299,7 @@ impl GuiApp {
                     }
                     if ui.button("Cancel").clicked() {
                         self.app.cancel_password();
+                        self.app.pending_backup_message = None;
                         self.text_input_focus = false;
                         self.app.message = Some("Password required for encrypted files".to_string());
                     }

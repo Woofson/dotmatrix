@@ -195,7 +195,8 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         // Continue with the operation that needed the password
                         match app.password_purpose {
                             PasswordPurpose::Backup => {
-                                app.perform_backup(None);
+                                let msg = app.pending_backup_message.take();
+                                app.perform_backup(msg);
                             }
                             PasswordPurpose::Restore => {
                                 app.perform_restore();
@@ -204,6 +205,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Esc => {
                         app.cancel_password();
+                        app.pending_backup_message = None;
                         app.message = Some("Password required for encrypted files".to_string());
                     }
                     KeyCode::Backspace => {
