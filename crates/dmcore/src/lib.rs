@@ -22,7 +22,8 @@ pub mod manifest;
 pub mod project;
 pub mod scanner;
 
-pub use config::Config;
-pub use index::Index;
+pub use config::{expand_path, contract_path, ArchiveFormat, BackupMode, Config};
+pub use index::{FileEntry, Index};
 pub use manifest::Manifest;
-pub use project::Project;
+pub use project::{Project, TrackMode, TrackedFile};
+pub use scanner::{hash_file, scan_file, scan_project, FileStatus, ProjectSummary, ScanResult};
