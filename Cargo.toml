@@ -1,22 +1,19 @@
-[package]
-name = "dotmatrix"
-version = "0.5.1"
+[workspace]
+resolver = "2"
+members = [
+    "crates/dmcore",
+    "crates/dmcli",
+    "crates/dmtui",
+    "crates/dmgui",
+]
+
+[workspace.package]
+version = "2.0.0-alpha.1"
 edition = "2021"
 authors = ["Woofson <https://github.com/Woofson>"]
-description = "Dotfile management and versioning tool"
 license = "MIT"
 
-# Main binary (CLI/TUI/GUI with console)
-[[bin]]
-name = "dotmatrix"
-path = "src/main.rs"
-
-# GUI-only binary (no console window on Windows)
-[[bin]]
-name = "dmgui"
-path = "src/dmgui.rs"
-
-[dependencies]
+[workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -35,34 +32,8 @@ crossterm = "0.28"
 ignore = "0.4"
 syntect = "5.2"
 eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
-open = "5.3"
 age = "0.11"
 
-[dev-dependencies]
-tempfile = "3.27.0"
-
-[package.metadata.deb]
-maintainer = "Woofson <https://github.com/Woofson>"
-copyright = "2024-2025, Woofson"
-license-file = ["LICENSE", "0"]
-extended-description = """\
-Dotmatrix is a cross-platform dotfile management tool that indexes \
-configuration files where they live, without using symlinks. It provides \
-version control through git integration and supports incremental \
-(content-addressed) and archive (tarball) backup modes."""
-depends = "$auto"
-section = "utils"
-priority = "optional"
-assets = [
-    ["target/release/dotmatrix", "usr/bin/", "755"],
-    ["target/release/dmgui", "usr/bin/", "755"],
-    ["dotmatrix.1", "usr/share/man/man1/", "644"],
-    ["dotmatrix.desktop", "usr/share/applications/", "644"],
-    ["assets/dotmatrix-icon-128.png", "usr/share/icons/hicolor/128x128/apps/dotmatrix-icon.png", "644"],
-    ["assets/dotmatrix-icon-256.png", "usr/share/icons/hicolor/256x256/apps/dotmatrix-icon.png", "644"],
-    ["assets/dotmatrix-icon-64.png", "usr/share/icons/hicolor/64x64/apps/dotmatrix-icon.png", "644"],
-    ["assets/dotmatrix-icon-48.png", "usr/share/icons/hicolor/48x48/apps/dotmatrix-icon.png", "644"],
-    ["assets/dotmatrix-icon-32.png", "usr/share/icons/hicolor/32x32/apps/dotmatrix-icon.png", "644"],
-    ["assets/dotmatrix-icon.svg", "usr/share/icons/hicolor/scalable/apps/dotmatrix-icon.svg", "644"],
-    ["README.md", "usr/share/doc/dotmatrix/README.md", "644"],
-]
+# Legacy v1 package - kept for reference during migration
+# The original src/ directory contains the v1 codebase
+# Migration path: extract logic into dmcore, frontends into dmcli/dmtui/dmgui
