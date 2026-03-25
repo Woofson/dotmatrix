@@ -14,5 +14,5 @@ path = "src/main.rs"
 dmcore = { path = "../dmcore" }
 ratatui = "0.29"
 crossterm = "0.28"
-syntect = "5.2"
 anyhow = "1.0"
+dirs = "5.0"
