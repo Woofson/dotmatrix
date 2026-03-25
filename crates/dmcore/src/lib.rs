@@ -16,14 +16,22 @@
 //! - Return types that frontends interpret and render
 //! - All logic lives here, frontends are thin wrappers
 
+pub mod backup;
 pub mod config;
+pub mod git;
 pub mod index;
 pub mod manifest;
 pub mod project;
 pub mod scanner;
+pub mod store;
 
-pub use config::{expand_path, contract_path, ArchiveFormat, BackupMode, Config};
+pub use backup::{backup_archive, backup_incremental, list_archives, ArchiveInfo, BackupResult};
+pub use config::{contract_path, expand_path, ArchiveFormat, BackupMode, Config};
+pub use git::{commit, init_repo, is_git_repo, recent_commits, stage_all, CommitInfo};
 pub use index::{FileEntry, Index};
 pub use manifest::Manifest;
 pub use project::{Project, TrackMode, TrackedFile};
-pub use scanner::{hash_file, scan_file, scan_project, FileStatus, ProjectSummary, ScanResult};
+pub use scanner::{
+    file_metadata, hash_file, scan_file, scan_project, FileStatus, ProjectSummary, ScanResult,
+};
+pub use store::{exists_in_store, get_stored_path, retrieve_file, store_file, StoreResult};
