@@ -5,8 +5,9 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use dmcore::{
-    contract_path, expand_path, scan_project, Config, FileStatus, Index, Manifest, Project,
-    ProjectSummary, TrackMode, TrackedFile,
+    backup_archive, backup_incremental, contract_path, expand_path, init_repo, retrieve_file,
+    scan_project, stage_all, commit, ArchiveFormat, Config, FileStatus, Index,
+    Manifest, Project, ProjectSummary, TrackMode, TrackedFile,
 };
 use std::path::Path;
 
@@ -79,19 +80,35 @@ enum Commands {
         project: Option<String>,
     },
 
-    /// Backup project files
+    /// Backup project files to content-addressed store
     Backup {
         /// Project name (or all if not specified)
         project: Option<String>,
+
+        /// Commit message for git
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Create archive backup instead of incremental
+        #[arg(short, long)]
+        archive: bool,
+
+        /// Archive format (tar.gz, zip, 7z)
+        #[arg(long, value_enum, default_value = "tar-gz")]
+        format: ArchiveFormatArg,
     },
 
-    /// Restore files from backup
+    /// Restore files from backup store
     Restore {
         /// Project name
         project: String,
 
         /// Specific files to restore (or all if not specified)
         files: Vec<String>,
+
+        /// Show what would be restored without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// List all projects
@@ -141,6 +158,23 @@ impl From<TrackModeArg> for TrackMode {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ArchiveFormatArg {
+    TarGz,
+    Zip,
+    SevenZ,
+}
+
+impl From<ArchiveFormatArg> for ArchiveFormat {
+    fn from(arg: ArchiveFormatArg) -> Self {
+        match arg {
+            ArchiveFormatArg::TarGz => ArchiveFormat::TarGz,
+            ArchiveFormatArg::Zip => ArchiveFormat::Zip,
+            ArchiveFormatArg::SevenZ => ArchiveFormat::SevenZ,
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -156,8 +190,17 @@ fn main() -> anyhow::Result<()> {
         Commands::Remove { project, files } => cmd_remove(project, files)?,
         Commands::Status { project, changes } => cmd_status(project, changes)?,
         Commands::Sync { project } => cmd_sync(project)?,
-        Commands::Backup { project } => cmd_backup(project)?,
-        Commands::Restore { project, files } => cmd_restore(project, files)?,
+        Commands::Backup {
+            project,
+            message,
+            archive,
+            format,
+        } => cmd_backup(project, message, archive, format.into())?,
+        Commands::Restore {
+            project,
+            files,
+            dry_run,
+        } => cmd_restore(project, files, dry_run)?,
         Commands::List { verbose } => cmd_list(verbose)?,
         Commands::Info { project } => cmd_info(project)?,
         Commands::Delete { project, force } => cmd_delete(project, force)?,
@@ -180,6 +223,11 @@ fn cmd_init() -> anyhow::Result<()> {
 
     let index = Index::load()?;
     index.save()?;
+
+    // Initialize git repo in data directory
+    let data_dir = config.data_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
+    init_repo(&data_dir)?;
 
     println!("Config:   {}", Config::config_path()?.display());
     println!("Manifest: {}", Manifest::manifest_path()?.display());
@@ -446,14 +494,204 @@ fn cmd_sync(project_name: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_backup(_project_name: Option<String>) -> anyhow::Result<()> {
-    println!("Backup functionality coming soon.");
-    println!("For now, use 'dotmatrix sync' to track file states.");
+fn cmd_backup(
+    project_name: Option<String>,
+    message: Option<String>,
+    archive: bool,
+    format: ArchiveFormat,
+) -> anyhow::Result<()> {
+    let config = Config::load()?;
+    let manifest = Manifest::load()?;
+    let mut index = Index::load()?;
+
+    // Initialize git repo if needed
+    let data_dir = config.data_dir()?;
+    init_repo(&data_dir)?;
+
+    let projects: Vec<(&str, &Project)> = match &project_name {
+        Some(name) => {
+            let p = manifest
+                .get_project(name)
+                .ok_or_else(|| anyhow::anyhow!("Project '{}' not found", name))?;
+            vec![(name.as_str(), p)]
+        }
+        None => manifest
+            .projects
+            .iter()
+            .map(|(k, v)| (k.as_str(), v))
+            .collect(),
+    };
+
+    if projects.is_empty() {
+        println!("No projects to backup.");
+        return Ok(());
+    }
+
+    let mut total_backed_up = 0;
+    let mut total_unchanged = 0;
+    let mut total_errors = 0;
+
+    for (name, project) in &projects {
+        if project.files.is_empty() {
+            continue;
+        }
+
+        println!("Backing up {}...", name);
+
+        if archive {
+            // Archive backup
+            let archive_path = backup_archive(&config, name, project, format)?;
+            println!("  Created archive: {}", archive_path.display());
+            total_backed_up += project.file_count();
+        } else {
+            // Incremental backup
+            let result = backup_incremental(&config, project, &mut index)?;
+
+            if result.backed_up > 0 {
+                println!("  {} file(s) backed up", result.backed_up);
+            }
+            if result.unchanged > 0 {
+                println!("  {} file(s) unchanged (deduplicated)", result.unchanged);
+            }
+            if result.errors > 0 {
+                println!("  {} error(s)", result.errors);
+            }
+
+            total_backed_up += result.backed_up;
+            total_unchanged += result.unchanged;
+            total_errors += result.errors;
+        }
+    }
+
+    // Save index
+    index.save()?;
+
+    // Git commit if incremental backup
+    if !archive && (total_backed_up > 0 || total_unchanged > 0) {
+        let store_dir = config.store_dir()?;
+        stage_all(&store_dir)?;
+
+        let msg = message.unwrap_or_else(|| {
+            format!(
+                "Backup: {} files ({} new, {} unchanged)",
+                total_backed_up + total_unchanged,
+                total_backed_up,
+                total_unchanged
+            )
+        });
+
+        if commit(&store_dir, &msg)? {
+            println!();
+            println!("Committed to git: {}", msg);
+        }
+    }
+
+    println!();
+    println!("Backup complete:");
+    println!("  Backed up:  {}", total_backed_up);
+    println!("  Unchanged:  {}", total_unchanged);
+    if total_errors > 0 {
+        println!("  Errors:     {}", total_errors);
+    }
+
     Ok(())
 }
 
-fn cmd_restore(_project_name: String, _files: Vec<String>) -> anyhow::Result<()> {
-    println!("Restore functionality coming soon.");
+fn cmd_restore(project_name: String, files: Vec<String>, dry_run: bool) -> anyhow::Result<()> {
+    let config = Config::load()?;
+    let manifest = Manifest::load()?;
+    let index = Index::load()?;
+
+    let project = manifest
+        .get_project(&project_name)
+        .ok_or_else(|| anyhow::anyhow!("Project '{}' not found", project_name))?;
+
+    if project.files.is_empty() {
+        println!("Project '{}' has no tracked files.", project_name);
+        return Ok(());
+    }
+
+    // Filter files if specific ones requested
+    let files_to_restore: Vec<_> = if files.is_empty() {
+        project.files.iter().collect()
+    } else {
+        project
+            .files
+            .iter()
+            .filter(|f| {
+                files.iter().any(|req| {
+                    f.path == *req || f.path.ends_with(req) || f.absolute_path().to_string_lossy().ends_with(req)
+                })
+            })
+            .collect()
+    };
+
+    if files_to_restore.is_empty() {
+        println!("No matching files found to restore.");
+        return Ok(());
+    }
+
+    println!(
+        "Restoring {} file(s) from project '{}'{}",
+        files_to_restore.len(),
+        project_name,
+        if dry_run { " (dry run)" } else { "" }
+    );
+    println!();
+
+    let mut restored = 0;
+    let mut not_found = 0;
+    let mut errors = 0;
+
+    for file in files_to_restore {
+        let abs_path = file.absolute_path();
+
+        // Look up in index to get hash
+        let entry = match index.get(&abs_path) {
+            Some(e) => e,
+            None => {
+                println!("  ? {} (not in index, run backup first)", file.path);
+                not_found += 1;
+                continue;
+            }
+        };
+
+        if dry_run {
+            let exists = abs_path.exists();
+            let status = if exists { "overwrite" } else { "create" };
+            println!("  {} {} (would {})", entry.hash[..8].to_string(), file.path, status);
+            restored += 1;
+        } else {
+            match retrieve_file(&config, &entry.hash, &abs_path) {
+                Ok(true) => {
+                    println!("  ✓ {}", file.path);
+                    restored += 1;
+                }
+                Ok(false) => {
+                    println!("  ✗ {} (not in store)", file.path);
+                    not_found += 1;
+                }
+                Err(e) => {
+                    println!("  ✗ {} ({})", file.path, e);
+                    errors += 1;
+                }
+            }
+        }
+    }
+
+    println!();
+    if dry_run {
+        println!("Dry run: {} file(s) would be restored", restored);
+    } else {
+        println!("Restored: {} file(s)", restored);
+    }
+    if not_found > 0 {
+        println!("Not found: {} file(s)", not_found);
+    }
+    if errors > 0 {
+        println!("Errors: {} file(s)", errors);
+    }
+
     Ok(())
 }
 
