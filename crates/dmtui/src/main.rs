@@ -239,13 +239,38 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
     }
 }
 
-fn handle_restore_keys(_app: &mut App, key: KeyCode) {
+fn handle_restore_keys(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Down | KeyCode::Char('j') => {
-            // TODO: Implement restore navigation
+            if !app.restore_files.is_empty() {
+                let i = app.restore_list_state.selected().unwrap_or(0);
+                let next = (i + 1).min(app.restore_files.len() - 1);
+                app.restore_list_state.select(Some(next));
+            }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            // TODO: Implement restore navigation
+            if !app.restore_files.is_empty() {
+                let i = app.restore_list_state.selected().unwrap_or(0);
+                let prev = i.saturating_sub(1);
+                app.restore_list_state.select(Some(prev));
+            }
+        }
+        KeyCode::Enter | KeyCode::Char('R') => {
+            // Restore selected file
+            app.restore_selected_file();
+        }
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(']') => {
+            // Next project
+            app.next_restore_project();
+        }
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('[') => {
+            // Previous project
+            app.prev_restore_project();
+        }
+        KeyCode::Char('r') => {
+            // Refresh
+            app.refresh_restore_files();
+            app.message = Some(("Refreshed".to_string(), false));
         }
         _ => {}
     }
@@ -434,11 +459,88 @@ fn render_add(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, chunks[1], &mut app.browse_list_state);
 }
 
-fn render_restore(f: &mut Frame, _app: &mut App, area: Rect) {
-    let msg = Paragraph::new("Restore view - coming soon\n\nUse CLI: dotmatrix restore <project>")
-        .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().borders(Borders::ALL).title(" Restore "));
-    f.render_widget(msg, area);
+fn render_restore(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.projects.is_empty() {
+        let msg = Paragraph::new("No projects. Create one with: dotmatrix new <name>")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Restore "));
+        f.render_widget(msg, area);
+        return;
+    }
+
+    // Ensure restore files are loaded when switching to this tab
+    if app.restore_files.is_empty() && !app.projects.is_empty() {
+        app.refresh_restore_files();
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    // Project selector line
+    let project_name = app.restore_project_name().unwrap_or("(none)");
+    let project_line = Paragraph::new(format!(" ◀ {} ▶  (←/→ to switch)", project_name))
+        .style(Style::default().fg(Color::Cyan));
+    f.render_widget(project_line, chunks[0]);
+
+    // File list
+    if app.restore_files.is_empty() {
+        let msg = Paragraph::new("No backed up files in this project.\nBackup first with 'b' in Projects tab.")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Restore Files "));
+        f.render_widget(msg, chunks[1]);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .restore_files
+        .iter()
+        .map(|file| {
+            let (icon, color) = if !file.current_exists {
+                ("✗", Color::Red)      // Missing - can restore
+            } else if file.is_different {
+                ("⚠", Color::Yellow)   // Different - can restore
+            } else {
+                ("✓", Color::Green)    // Same - already current
+            };
+
+            let status = if !file.current_exists {
+                "missing"
+            } else if file.is_different {
+                "changed"
+            } else {
+                "current"
+            };
+
+            let size_str = format_size(file.backed_up_size);
+
+            ListItem::new(Line::from(vec![
+                Span::styled(icon, Style::default().fg(color)),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{:>8}", size_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("  "),
+                Span::raw(&file.path),
+                Span::styled(
+                    format!("  [{}]", status),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Restore Files (Enter to restore) "),
+        )
+        .highlight_style(Style::default().bg(Color::DarkGray));
+
+    f.render_stateful_widget(list, chunks[1], &mut app.restore_list_state);
 }
 
 fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
@@ -454,7 +556,7 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
         let help = match app.mode {
             Mode::Projects => "↑↓:select  Enter:expand  b:backup  s:sync  ?:help  q:quit",
             Mode::Add => "↑↓:select  Enter:open/add  h:parent  ~:home  ?:help  q:quit",
-            Mode::Restore => "?:help  q:quit",
+            Mode::Restore => "↑↓:select  ←→:project  Enter:restore  r:refresh  ?:help  q:quit",
         };
         (help.to_string(), Style::default().fg(Color::DarkGray))
     };
@@ -495,7 +597,11 @@ fn render_help(f: &mut Frame, _app: &App) {
 
  RESTORE TAB
  ───────────────────────────
- (Coming soon)
+ ↑/k ↓/j    Navigate files
+ ←/h [      Previous project
+ →/l ]      Next project
+ Enter/R    Restore selected file
+ r          Refresh list
 "#;
 
     let help = Paragraph::new(help_text)
