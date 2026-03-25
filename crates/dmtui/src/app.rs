@@ -3,8 +3,9 @@
 //! Manages the core state shared between UI rendering and input handling.
 
 use dmcore::{
-    backup_incremental, contract_path, expand_path, init_repo, scan_project, stage_all, commit,
-    Config, FileStatus, Index, Manifest, ProjectSummary, TrackMode,
+    backup_incremental, contract_path, exists_in_store, expand_path, hash_file, init_repo,
+    retrieve_file, scan_project, stage_all, commit, Config, FileStatus, Index, Manifest,
+    ProjectSummary, TrackMode,
 };
 use ratatui::widgets::ListState;
 use std::collections::HashSet;
@@ -74,6 +75,19 @@ pub struct OpResult {
     pub message: String,
 }
 
+/// A file that can be restored from backup
+#[derive(Debug, Clone)]
+pub struct RestoreFile {
+    pub path: String,           // Contracted path (~/...)
+    pub abs_path: PathBuf,      // Absolute path
+    pub hash: String,           // Hash in store
+    pub backed_up_size: u64,    // Size when backed up
+    pub current_exists: bool,   // Whether file currently exists
+    pub current_size: Option<u64>, // Current size if exists
+    pub is_different: bool,     // Whether current differs from backup
+    pub last_backup: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Application state
 pub struct App {
     pub mode: Mode,
@@ -95,8 +109,9 @@ pub struct App {
     pub target_project: Option<String>,
 
     // Restore state
-    pub restore_files: Vec<DisplayFile>,
+    pub restore_files: Vec<RestoreFile>,
     pub restore_list_state: ListState,
+    pub restore_project_idx: usize, // Which project to restore from
 
     // UI state
     pub message: Option<(String, bool)>, // (message, is_error)
@@ -149,6 +164,7 @@ impl App {
             target_project: None,
             restore_files: Vec::new(),
             restore_list_state: ListState::default(),
+            restore_project_idx: 0,
             message: None,
             should_quit: false,
             show_help: false,
@@ -444,7 +460,7 @@ impl App {
         for file in &project.files {
             let abs_path = file.absolute_path();
             if abs_path.exists() {
-                if let Ok(hash) = dmcore::hash_file(&abs_path) {
+                if let Ok(hash) = hash_file(&abs_path) {
                     if let Ok((size, modified)) = dmcore::file_metadata(&abs_path) {
                         let entry = dmcore::FileEntry::with_sync_now(hash, size, modified);
                         self.index.upsert(abs_path, entry);
@@ -461,6 +477,127 @@ impl App {
         } else {
             self.message = Some(("Nothing to sync".to_string(), false));
         }
+    }
+
+    /// Refresh the restore files list for the selected project
+    pub fn refresh_restore_files(&mut self) {
+        self.restore_files.clear();
+
+        // Get project at current restore_project_idx
+        let project_name = match self.projects.get(self.restore_project_idx) {
+            Some(p) => p.name.clone(),
+            None => return,
+        };
+
+        let project = match self.manifest.get_project(&project_name) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Build restore file list from files that have been backed up
+        for file in &project.files {
+            let abs_path = file.absolute_path();
+
+            // Check if this file has an entry in the index with a backup
+            if let Some(entry) = self.index.get(&abs_path) {
+                // Verify the hash exists in the store
+                if exists_in_store(&self.config, &entry.hash).unwrap_or(false) {
+                    let current_exists = abs_path.exists();
+                    let current_size = if current_exists {
+                        std::fs::metadata(&abs_path).ok().map(|m| m.len())
+                    } else {
+                        None
+                    };
+
+                    // Check if current file is different from backup
+                    let is_different = if current_exists {
+                        hash_file(&abs_path)
+                            .map(|h| h != entry.hash)
+                            .unwrap_or(true)
+                    } else {
+                        true // Missing is "different"
+                    };
+
+                    self.restore_files.push(RestoreFile {
+                        path: file.path.clone(),
+                        abs_path: abs_path.clone(),
+                        hash: entry.hash.clone(),
+                        backed_up_size: entry.size,
+                        current_exists,
+                        current_size,
+                        is_different,
+                        last_backup: entry.last_backup,
+                    });
+                }
+            }
+        }
+
+        // Select first file if we have any
+        if !self.restore_files.is_empty() {
+            self.restore_list_state.select(Some(0));
+        } else {
+            self.restore_list_state.select(None);
+        }
+    }
+
+    /// Restore the selected file from backup
+    pub fn restore_selected_file(&mut self) -> bool {
+        let idx = match self.restore_list_state.selected() {
+            Some(i) => i,
+            None => {
+                self.message = Some(("No file selected".to_string(), true));
+                return false;
+            }
+        };
+
+        let file = match self.restore_files.get(idx) {
+            Some(f) => f.clone(),
+            None => return false,
+        };
+
+        // Perform restore
+        match retrieve_file(&self.config, &file.hash, &file.abs_path) {
+            Ok(true) => {
+                self.message = Some((format!("Restored {}", file.path), false));
+                // Refresh to update status
+                self.refresh_restore_files();
+                self.refresh_projects();
+                true
+            }
+            Ok(false) => {
+                self.message = Some(("Backup file not found in store".to_string(), true));
+                false
+            }
+            Err(e) => {
+                self.message = Some((format!("Restore failed: {}", e), true));
+                false
+            }
+        }
+    }
+
+    /// Cycle to the next project for restore view
+    pub fn next_restore_project(&mut self) {
+        if !self.projects.is_empty() {
+            self.restore_project_idx = (self.restore_project_idx + 1) % self.projects.len();
+            self.refresh_restore_files();
+        }
+    }
+
+    /// Cycle to the previous project for restore view
+    pub fn prev_restore_project(&mut self) {
+        if !self.projects.is_empty() {
+            self.restore_project_idx = if self.restore_project_idx == 0 {
+                self.projects.len() - 1
+            } else {
+                self.restore_project_idx - 1
+            };
+            self.refresh_restore_files();
+        }
+    }
+
+    /// Get current restore project name
+    pub fn restore_project_name(&self) -> Option<&str> {
+        self.projects.get(self.restore_project_idx).map(|p| p.name.as_str())
     }
 
     /// Save dirty state
