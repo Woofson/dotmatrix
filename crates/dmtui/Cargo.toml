@@ -1,0 +1,18 @@
+[package]
+name = "dmtui"
+version = "2.0.0-alpha.1"
+edition = "2021"
+authors = ["Woofson <https://github.com/Woofson>"]
+description = "TUI for dotmatrix - project compositor with git versioning"
+license = "MIT"
+
+[[bin]]
+name = "dotmatrix-tui"
+path = "src/main.rs"
+
+[dependencies]
+dmcore = { path = "../dmcore" }
+ratatui = "0.29"
+crossterm = "0.28"
+syntect = "5.2"
+anyhow = "1.0"
