@@ -223,6 +223,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     KeyCode::Char('a') => {
                         app.toggle_all_preview_files();
                     }
+                    KeyCode::Char('t') => {
+                        app.toggle_preview_track_mode();
+                    }
+                    KeyCode::Char('T') => {
+                        app.set_all_preview_track_mode();
+                    }
                     _ => {}
                 }
                 continue;
@@ -525,6 +531,17 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
         KeyCode::Char('t') => {
             // Cycle track mode for adding files
             app.cycle_add_track_mode();
+        }
+        KeyCode::Char('u') => {
+            // Untrack selected file
+            if let Some(idx) = app.browse_list_state.selected() {
+                if let Some(file) = app.browse_files.get(idx) {
+                    if file.is_tracked && !file.is_dir {
+                        let path = file.path.clone();
+                        app.untrack_file(&path);
+                    }
+                }
+            }
         }
         KeyCode::Char('v') => {
             app.open_viewer();
@@ -974,12 +991,11 @@ fn render_add(f: &mut Frame, app: &mut App, area: Rect) {
                 .unwrap_or_default();
 
             if file.is_tracked {
-                // Already tracked - show in distinct color (not grey)
+                // Already tracked - show in yellow with checkmark
                 ListItem::new(Line::from(vec![
-                    Span::styled(icon, Style::default().fg(Color::Blue)),
-                    Span::styled(&file.name, Style::default().fg(Color::DarkGray)),
+                    Span::styled(" ✓ ", Style::default().fg(Color::Green)),
+                    Span::styled(&file.name, Style::default().fg(Color::Yellow)),
                     Span::styled(size_str, Style::default().fg(Color::DarkGray)),
-                    Span::styled(" ✓", Style::default().fg(Color::Green)),
                 ]))
             } else if file.is_dir {
                 // Directory
@@ -1372,11 +1388,21 @@ fn render_help(f: &mut Frame, _app: &App) {
  Enter/→/l  Open dir / Add file
  ←/h/Bksp   Parent directory
  a          Add selected file
+ u          Untrack file
  R          Recursive add
  p          Cycle target project
  t          Cycle track mode
  n          New project
  ~          Go to home
+
+ RECURSIVE ADD POPUP
+ ───────────────────────────
+ Space      Toggle selection
+ a          Toggle all
+ t          Cycle track mode
+ T          Set all track mode
+ Enter      Add selected files
+ Esc/q      Cancel
 
  RESTORE - PROJECTS
  ───────────────────────────
@@ -1655,6 +1681,11 @@ fn render_recursive_preview(f: &mut Frame, app: &mut App) {
                 } else {
                     "[ ]"
                 };
+                let (mode_badge, mode_color) = match file.track_mode {
+                    dmcore::TrackMode::Git => ("[G]", Color::Cyan),
+                    dmcore::TrackMode::Backup => ("[B]", Color::Magenta),
+                    dmcore::TrackMode::Both => ("[+]", Color::Green),
+                };
                 let size_str = format_size(file.size);
 
                 ListItem::new(Line::from(vec![
@@ -1666,6 +1697,7 @@ fn render_recursive_preview(f: &mut Frame, app: &mut App) {
                             Color::DarkGray
                         }),
                     ),
+                    Span::styled(format!("{} ", mode_badge), Style::default().fg(mode_color)),
                     Span::styled(
                         format!("{:>8}  ", size_str),
                         Style::default().fg(Color::DarkGray),
@@ -1727,8 +1759,8 @@ fn render_recursive_preview(f: &mut Frame, app: &mut App) {
     );
 
     // Footer with hints
-    let footer = Paragraph::new(" Space: toggle  a: all  Enter: add  Esc: cancel")
-        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+    let footer = Paragraph::new(" Space: toggle  a: all  t: mode  T: all mode  Enter: add  Esc: cancel")
+        .style(Style::default().fg(Color::Cyan).bg(Color::Black));
     f.render_widget(footer, chunks[2]);
 }
 

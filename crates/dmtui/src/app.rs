@@ -182,6 +182,7 @@ pub struct PreviewFile {
     pub path: PathBuf,
     pub display_path: String,
     pub size: u64,
+    pub track_mode: TrackMode,
 }
 
 /// State for recursive add preview
@@ -839,6 +840,40 @@ impl App {
                 self.message = Some(("File already tracked".to_string(), true));
             }
         }
+        false
+    }
+
+    /// Remove a file from all projects (untrack)
+    pub fn untrack_file(&mut self, path: &PathBuf) -> bool {
+        let contracted = contract_path(path);
+        let mut removed_from = Vec::new();
+
+        // Check all projects for this file
+        for (name, project) in self.manifest.projects.iter_mut() {
+            if let Some(pos) = project.files.iter().position(|f| f.path == contracted) {
+                project.files.remove(pos);
+                removed_from.push(name.clone());
+            }
+        }
+
+        if !removed_from.is_empty() {
+            self.manifest_dirty = true;
+            self.message = Some((
+                format!("Removed {} from {}", contracted, removed_from.join(", ")),
+                false,
+            ));
+            self.refresh_projects();
+            // Preserve cursor position when refreshing browse
+            let saved_selection = self.browse_list_state.selected();
+            self.refresh_browse();
+            if let Some(idx) = saved_selection {
+                let max_idx = self.browse_files.len().saturating_sub(1);
+                self.browse_list_state.select(Some(idx.min(max_idx)));
+            }
+            return true;
+        }
+
+        self.message = Some(("File not tracked".to_string(), true));
         false
     }
 
@@ -1755,6 +1790,7 @@ impl App {
                     path,
                     display_path,
                     size,
+                    track_mode: self.default_track_mode,
                 });
             }
         }
@@ -1796,8 +1832,8 @@ impl App {
         for idx in &preview.selected_files {
             if let Some(file) = preview.preview_files.get(*idx) {
                 let contracted = contract_path(&file.path);
-                // Create a TrackedFile with the selected track mode
-                let tracked = dmcore::TrackedFile::with_mode(&contracted, self.default_track_mode);
+                // Create a TrackedFile with the file's track mode
+                let tracked = dmcore::TrackedFile::with_mode(&contracted, file.track_mode);
                 if project.add_file(tracked) {
                     added += 1;
                 }
@@ -1843,6 +1879,41 @@ impl App {
                 preview.selected_files.clear();
             } else {
                 preview.selected_files = (0..preview.preview_files.len()).collect();
+            }
+        }
+    }
+
+    /// Toggle track mode for selected file in recursive preview
+    pub fn toggle_preview_track_mode(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            if let Some(idx) = preview.preview_list_state.selected() {
+                if let Some(file) = preview.preview_files.get_mut(idx) {
+                    file.track_mode = match file.track_mode {
+                        TrackMode::Git => TrackMode::Backup,
+                        TrackMode::Backup => TrackMode::Both,
+                        TrackMode::Both => TrackMode::Git,
+                    };
+                }
+            }
+        }
+    }
+
+    /// Set track mode for all files in recursive preview
+    pub fn set_all_preview_track_mode(&mut self) {
+        if let Some(ref mut preview) = self.recursive_preview {
+            // Cycle through modes: Git -> Backup -> Both -> Git
+            let first_mode = preview
+                .preview_files
+                .first()
+                .map(|f| f.track_mode)
+                .unwrap_or(TrackMode::Both);
+            let new_mode = match first_mode {
+                TrackMode::Git => TrackMode::Backup,
+                TrackMode::Backup => TrackMode::Both,
+                TrackMode::Both => TrackMode::Git,
+            };
+            for file in &mut preview.preview_files {
+                file.track_mode = new_mode;
             }
         }
     }
