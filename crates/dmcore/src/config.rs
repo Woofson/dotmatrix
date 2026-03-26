@@ -109,13 +109,17 @@ impl ArchiveFormat {
 
 impl Config {
     /// Load config from the default location
+    /// Creates the config file with defaults if it doesn't exist
     pub fn load() -> anyhow::Result<Self> {
         let path = Self::config_path()?;
         if path.exists() {
             let contents = std::fs::read_to_string(&path)?;
             Ok(toml::from_str(&contents)?)
         } else {
-            Ok(Self::default())
+            // Create default config and save it
+            let config = Self::default();
+            config.save()?;
+            Ok(config)
         }
     }
 

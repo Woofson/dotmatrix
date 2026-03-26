@@ -4,10 +4,10 @@
 
 use age::secrecy::SecretString;
 use dmcore::{
-    backup_project_incremental_encrypted_with_message, contract_path, expand_path,
-    get_remote_status, hash_file, init_project_repo, project_needs_password, recent_commits,
-    retrieve_file_from, retrieve_file_from_encrypted, scan_project, CommitInfo, Config,
-    FileStatus, Index, Manifest, ProjectSummary, RemoteStatus, TrackMode,
+    backup_archive, backup_project_incremental_encrypted_with_message, contract_path, expand_path,
+    get_remote_status, hash_file, init_project_repo, list_archives, project_needs_password,
+    recent_commits, retrieve_file_from, retrieve_file_from_encrypted, scan_project, CommitInfo,
+    Config, FileStatus, Index, Manifest, ProjectSummary, RemoteStatus, TrackMode,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::ListState;
@@ -112,6 +112,38 @@ pub enum PasswordPurpose {
     #[default]
     Backup,
     Restore,
+}
+
+/// Restore destination mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestoreDestination {
+    #[default]
+    Original,  // Restore to original location
+    Custom,    // Restore to custom location (user enters path)
+}
+
+/// What to view in restore preview
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestorePreviewMode {
+    #[default]
+    FileList,   // Show file list
+    Backup,     // View backup file content
+    Local,      // View local file content
+    Diff,       // View diff between backup and local
+}
+
+/// Restore confirmation dialog state
+#[derive(Debug, Clone, Default)]
+pub struct RestoreConfirmState {
+    pub visible: bool,
+    pub destination: RestoreDestination,
+    pub custom_path: String,
+    pub entering_path: bool,
+    pub files_to_restore: Vec<usize>,  // Indices into restore_files
+    pub will_overwrite: usize,         // Count of files that will be overwritten
+    pub selected_idx: usize,           // Selected file in the list
+    pub scroll_offset: usize,          // Scroll offset for file list
+    pub preview_mode: RestorePreviewMode, // Current view mode
 }
 
 /// A displayable file entry
@@ -286,8 +318,12 @@ pub struct App {
     pub viewer_content: Vec<ViewerLine>,
     pub viewer_scroll: usize,
     pub viewer_title: String,
+    pub viewer_line_numbers: bool,
     pub syntax_set: SyntaxSet,
     pub theme_set: ThemeSet,
+
+    // Restore confirmation state
+    pub restore_confirm: RestoreConfirmState,
 }
 
 /// File entry for browsing
@@ -297,7 +333,14 @@ pub struct BrowseFile {
     pub name: String,
     pub is_dir: bool,
     pub size: Option<u64>,
-    pub is_tracked: bool,
+    pub tracked_in: Vec<String>,  // List of project names this file is tracked in
+}
+
+impl BrowseFile {
+    /// Check if this file is tracked in any project
+    pub fn is_tracked(&self) -> bool {
+        !self.tracked_in.is_empty()
+    }
 }
 
 impl App {
@@ -361,8 +404,10 @@ impl App {
             viewer_content: Vec::new(),
             viewer_scroll: 0,
             viewer_title: String::new(),
+            viewer_line_numbers: true,
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
+            restore_confirm: RestoreConfirmState::default(),
         };
 
         app.refresh_projects();
@@ -571,7 +616,7 @@ impl App {
                 name: "..".to_string(),
                 is_dir: true,
                 size: None,
-                is_tracked: false,
+                tracked_in: Vec::new(),
             });
         }
 
@@ -596,20 +641,37 @@ impl App {
                         std::fs::metadata(&path).ok().map(|m| m.len())
                     };
 
-                    // Check if tracked in any project
+                    // Find all projects this file/folder is tracked in
                     let contracted = contract_path(&path);
-                    let is_tracked = self
-                        .manifest
-                        .projects
-                        .values()
-                        .any(|p| p.files.iter().any(|f| f.path == contracted));
+                    let tracked_in: Vec<String> = if is_dir {
+                        // For directories, find projects that have files under this path
+                        let dir_prefix = format!("{}/", contracted);
+                        self.manifest
+                            .projects
+                            .iter()
+                            .filter(|(_, p)| {
+                                p.files.iter().any(|f| {
+                                    f.path.starts_with(&dir_prefix) || f.path == contracted
+                                })
+                            })
+                            .map(|(name, _)| name.clone())
+                            .collect()
+                    } else {
+                        // For files, exact match
+                        self.manifest
+                            .projects
+                            .iter()
+                            .filter(|(_, p)| p.files.iter().any(|f| f.path == contracted))
+                            .map(|(name, _)| name.clone())
+                            .collect()
+                    };
 
                     Some(BrowseFile {
                         path,
                         name,
                         is_dir,
                         size,
-                        is_tracked,
+                        tracked_in,
                     })
                 })
                 .collect();
@@ -1030,6 +1092,66 @@ impl App {
         });
     }
 
+    /// Backup selected project to an archive (tar.gz, zip, or 7z)
+    pub fn backup_project_archive(&mut self) {
+        let project_name = match self.selected_project_name() {
+            Some(name) => name,
+            None => {
+                self.message = Some(("No project selected".to_string(), true));
+                return;
+            }
+        };
+
+        let project = match self.manifest.get_project(&project_name) {
+            Some(p) => p.clone(),
+            None => {
+                self.message = Some(("Project not found".to_string(), true));
+                return;
+            }
+        };
+
+        let config = self.config.clone();
+        let name = project_name.clone();
+        let format = config.default_archive_format;
+
+        let (tx, rx) = mpsc::channel();
+        self.op_receiver = Some(rx);
+        self.busy = true;
+        self.busy_message = format!("Creating {} archive for {}...", format.extension(), project_name);
+
+        std::thread::spawn(move || {
+            let result = backup_archive(&config, &name, &project, format);
+
+            let op_result = match result {
+                Ok(path) => OpResult {
+                    success: true,
+                    message: format!(
+                        "Archive created: {}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.display().to_string())
+                    ),
+                },
+                Err(e) => OpResult {
+                    success: false,
+                    message: e.to_string(),
+                },
+            };
+
+            let _ = tx.send(op_result);
+        });
+    }
+
+    /// List archive backups for the selected project
+    pub fn list_project_archives(&self) -> Vec<dmcore::ArchiveInfo> {
+        let project_name = match self.selected_project_name() {
+            Some(name) => name,
+            None => return Vec::new(),
+        };
+
+        list_archives(&self.config, &project_name).unwrap_or_default()
+    }
+
     /// Check if selected project needs a password
     pub fn selected_project_needs_password(&self) -> bool {
         let project_name = match self.selected_project_name() {
@@ -1356,10 +1478,10 @@ impl App {
         path.clone()
     }
 
-    /// Restore selected files from the selected commit
-    pub fn perform_restore(&mut self) {
+    /// Show restore confirmation dialog
+    pub fn show_restore_confirm(&mut self) {
         let indices: Vec<usize> = if self.restore_selected.is_empty() {
-            // If nothing selected, restore the currently highlighted file
+            // If nothing selected, use the currently highlighted file
             self.restore_list_state.selected().into_iter().collect()
         } else {
             self.restore_selected.iter().cloned().collect()
@@ -1370,26 +1492,509 @@ impl App {
             return;
         }
 
-        // Check if any selected files are encrypted
-        let needs_password = indices
+        // Count how many files will be overwritten
+        let will_overwrite = indices
+            .iter()
+            .filter(|&&i| {
+                self.restore_files
+                    .get(i)
+                    .map(|f| f.exists_locally)
+                    .unwrap_or(false)
+            })
+            .count();
+
+        self.restore_confirm = RestoreConfirmState {
+            visible: true,
+            destination: RestoreDestination::Original,
+            custom_path: String::new(),
+            entering_path: false,
+            files_to_restore: indices,
+            will_overwrite,
+            selected_idx: 0,
+            scroll_offset: 0,
+            preview_mode: RestorePreviewMode::FileList,
+        };
+    }
+
+    /// Navigate up in restore confirm file list
+    pub fn restore_confirm_up(&mut self) {
+        if self.restore_confirm.selected_idx > 0 {
+            self.restore_confirm.selected_idx -= 1;
+            // Adjust scroll if needed
+            if self.restore_confirm.selected_idx < self.restore_confirm.scroll_offset {
+                self.restore_confirm.scroll_offset = self.restore_confirm.selected_idx;
+            }
+        }
+    }
+
+    /// Navigate down in restore confirm file list
+    pub fn restore_confirm_down(&mut self) {
+        let max_idx = self.restore_confirm.files_to_restore.len().saturating_sub(1);
+        if self.restore_confirm.selected_idx < max_idx {
+            self.restore_confirm.selected_idx += 1;
+        }
+    }
+
+    /// View backup file content for selected file in restore confirm
+    pub fn view_restore_backup(&mut self) {
+        if self.restore_confirm.files_to_restore.is_empty() {
+            return;
+        }
+
+        let file_idx = self.restore_confirm.files_to_restore[self.restore_confirm.selected_idx];
+        let file = match self.restore_files.get(file_idx) {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        // Get the backup content from store
+        let project_name = match &self.selected_backup_project {
+            Some(n) => n.clone(),
+            None => return,
+        };
+
+        let store_dir = match self.config.project_store_dir(&project_name) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // Create a temp file to retrieve the backup content
+        let temp_path = std::env::temp_dir().join(format!("dmtui_preview_{}", file.hash));
+
+        let result = if file.encrypted {
+            retrieve_file_from_encrypted(
+                &store_dir,
+                &file.hash,
+                &temp_path,
+                self.encryption_password.as_ref(),
+                true,
+            )
+        } else {
+            retrieve_file_from(&store_dir, &file.hash, &temp_path)
+        };
+
+        if result.is_ok() {
+            // Load content into viewer
+            self.load_file_into_viewer(&temp_path, &format!("Backup: {}", file.display_path));
+            self.restore_confirm.preview_mode = RestorePreviewMode::Backup;
+            // Clean up temp file
+            let _ = fs::remove_file(&temp_path);
+        } else {
+            self.message = Some(("Failed to load backup file".to_string(), true));
+        }
+    }
+
+    /// View local file content for selected file in restore confirm
+    pub fn view_restore_local(&mut self) {
+        if self.restore_confirm.files_to_restore.is_empty() {
+            return;
+        }
+
+        let file_idx = self.restore_confirm.files_to_restore[self.restore_confirm.selected_idx];
+        let file = match self.restore_files.get(file_idx) {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        if !file.exists_locally {
+            self.message = Some(("Local file does not exist".to_string(), true));
+            return;
+        }
+
+        self.load_file_into_viewer(&file.restore_path, &format!("Local: {}", file.display_path));
+        self.restore_confirm.preview_mode = RestorePreviewMode::Local;
+    }
+
+    /// View diff between backup and local file
+    pub fn view_restore_diff(&mut self) {
+        if self.restore_confirm.files_to_restore.is_empty() {
+            return;
+        }
+
+        let file_idx = self.restore_confirm.files_to_restore[self.restore_confirm.selected_idx];
+        let file = match self.restore_files.get(file_idx) {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        if !file.exists_locally {
+            self.message = Some(("Local file does not exist - nothing to diff".to_string(), true));
+            return;
+        }
+
+        if !file.local_differs {
+            self.message = Some(("Files are identical - no differences".to_string(), false));
+            return;
+        }
+
+        // Get the backup content from store
+        let project_name = match &self.selected_backup_project {
+            Some(n) => n.clone(),
+            None => return,
+        };
+
+        let store_dir = match self.config.project_store_dir(&project_name) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // Retrieve backup to temp file
+        let temp_path = std::env::temp_dir().join(format!("dmtui_diff_{}", file.hash));
+
+        let result = if file.encrypted {
+            retrieve_file_from_encrypted(
+                &store_dir,
+                &file.hash,
+                &temp_path,
+                self.encryption_password.as_ref(),
+                true,
+            )
+        } else {
+            retrieve_file_from(&store_dir, &file.hash, &temp_path)
+        };
+
+        if result.is_err() {
+            self.message = Some(("Failed to load backup file for diff".to_string(), true));
+            return;
+        }
+
+        // Read both files
+        let backup_content = match fs::read_to_string(&temp_path) {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = fs::remove_file(&temp_path);
+                self.message = Some(("Cannot read backup file (binary?)".to_string(), true));
+                return;
+            }
+        };
+
+        let local_content = match fs::read_to_string(&file.restore_path) {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = fs::remove_file(&temp_path);
+                self.message = Some(("Cannot read local file (binary?)".to_string(), true));
+                return;
+            }
+        };
+
+        let _ = fs::remove_file(&temp_path);
+
+        // Generate unified diff
+        self.generate_diff_view(&backup_content, &local_content, &file.display_path);
+        self.restore_confirm.preview_mode = RestorePreviewMode::Diff;
+    }
+
+    /// Generate a diff view between two file contents
+    fn generate_diff_view(&mut self, backup: &str, local: &str, filename: &str) {
+        use std::collections::VecDeque;
+
+        let backup_lines: Vec<&str> = backup.lines().collect();
+        let local_lines: Vec<&str> = local.lines().collect();
+
+        let mut viewer_lines = Vec::new();
+
+        // Header
+        viewer_lines.push(ViewerLine {
+            spans: vec![(
+                format!("Diff: {} (backup vs local)", filename),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )],
+            file_header: true,
+        });
+        viewer_lines.push(ViewerLine {
+            spans: vec![(
+                "─".repeat(60),
+                Style::default().fg(Color::DarkGray),
+            )],
+            file_header: false,
+        });
+        viewer_lines.push(ViewerLine {
+            spans: vec![
+                ("- ".to_string(), Style::default().fg(Color::Red)),
+                ("lines only in backup".to_string(), Style::default().fg(Color::Red)),
+            ],
+            file_header: false,
+        });
+        viewer_lines.push(ViewerLine {
+            spans: vec![
+                ("+ ".to_string(), Style::default().fg(Color::Green)),
+                ("lines only in local".to_string(), Style::default().fg(Color::Green)),
+            ],
+            file_header: false,
+        });
+        viewer_lines.push(ViewerLine {
+            spans: vec![(
+                "─".repeat(60),
+                Style::default().fg(Color::DarkGray),
+            )],
+            file_header: false,
+        });
+
+        // Simple line-by-line diff using LCS-like approach
+        let mut bi = 0;
+        let mut li = 0;
+        let mut context_queue: VecDeque<(usize, &str)> = VecDeque::new();
+        let context_size = 3;
+        let mut in_diff_section = false;
+        let mut last_diff_line = 0;
+
+        while bi < backup_lines.len() || li < local_lines.len() {
+            if bi < backup_lines.len() && li < local_lines.len() {
+                if backup_lines[bi] == local_lines[li] {
+                    // Lines match
+                    if in_diff_section && (bi - last_diff_line) <= context_size {
+                        // Show trailing context
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("  {}", backup_lines[bi]),
+                                Style::default().fg(Color::DarkGray),
+                            )],
+                            file_header: false,
+                        });
+                    } else {
+                        in_diff_section = false;
+                    }
+                    context_queue.push_back((bi, backup_lines[bi]));
+                    if context_queue.len() > context_size {
+                        context_queue.pop_front();
+                    }
+                    bi += 1;
+                    li += 1;
+                } else {
+                    // Lines differ - show leading context first
+                    if !in_diff_section {
+                        for (_, ctx_line) in &context_queue {
+                            viewer_lines.push(ViewerLine {
+                                spans: vec![(
+                                    format!("  {}", ctx_line),
+                                    Style::default().fg(Color::DarkGray),
+                                )],
+                                file_header: false,
+                            });
+                        }
+                        context_queue.clear();
+                    }
+                    in_diff_section = true;
+                    last_diff_line = bi;
+
+                    // Check if backup line appears later in local (deletion)
+                    // or if local line appears later in backup (addition)
+                    let backup_in_local = local_lines[li..].contains(&backup_lines[bi]);
+                    let local_in_backup = backup_lines[bi..].contains(&local_lines[li]);
+
+                    if !backup_in_local && local_in_backup {
+                        // Backup line was deleted
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("- {}", backup_lines[bi]),
+                                Style::default().fg(Color::Red),
+                            )],
+                            file_header: false,
+                        });
+                        bi += 1;
+                    } else if backup_in_local && !local_in_backup {
+                        // Local line was added
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("+ {}", local_lines[li]),
+                                Style::default().fg(Color::Green),
+                            )],
+                            file_header: false,
+                        });
+                        li += 1;
+                    } else {
+                        // Line was modified (show both)
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("- {}", backup_lines[bi]),
+                                Style::default().fg(Color::Red),
+                            )],
+                            file_header: false,
+                        });
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("+ {}", local_lines[li]),
+                                Style::default().fg(Color::Green),
+                            )],
+                            file_header: false,
+                        });
+                        bi += 1;
+                        li += 1;
+                    }
+                }
+            } else if bi < backup_lines.len() {
+                // Remaining lines only in backup (deleted)
+                if !in_diff_section {
+                    for (_, ctx_line) in &context_queue {
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("  {}", ctx_line),
+                                Style::default().fg(Color::DarkGray),
+                            )],
+                            file_header: false,
+                        });
+                    }
+                    context_queue.clear();
+                }
+                in_diff_section = true;
+                viewer_lines.push(ViewerLine {
+                    spans: vec![(
+                        format!("- {}", backup_lines[bi]),
+                        Style::default().fg(Color::Red),
+                    )],
+                    file_header: false,
+                });
+                bi += 1;
+            } else {
+                // Remaining lines only in local (added)
+                if !in_diff_section {
+                    for (_, ctx_line) in &context_queue {
+                        viewer_lines.push(ViewerLine {
+                            spans: vec![(
+                                format!("  {}", ctx_line),
+                                Style::default().fg(Color::DarkGray),
+                            )],
+                            file_header: false,
+                        });
+                    }
+                    context_queue.clear();
+                }
+                in_diff_section = true;
+                viewer_lines.push(ViewerLine {
+                    spans: vec![(
+                        format!("+ {}", local_lines[li]),
+                        Style::default().fg(Color::Green),
+                    )],
+                    file_header: false,
+                });
+                li += 1;
+            }
+        }
+
+        self.viewer_content = viewer_lines;
+        self.viewer_scroll = 0;
+        self.viewer_title = format!("Diff: {}", filename);
+        self.viewer_visible = true;
+    }
+
+    /// Close preview and return to file list in restore confirm
+    pub fn close_restore_preview(&mut self) {
+        self.viewer_visible = false;
+        self.restore_confirm.preview_mode = RestorePreviewMode::FileList;
+    }
+
+    /// Cancel restore confirmation
+    pub fn cancel_restore_confirm(&mut self) {
+        self.restore_confirm = RestoreConfirmState::default();
+    }
+
+    /// Toggle between original and custom restore destination
+    pub fn toggle_restore_destination(&mut self) {
+        self.restore_confirm.destination = match self.restore_confirm.destination {
+            RestoreDestination::Original => RestoreDestination::Custom,
+            RestoreDestination::Custom => RestoreDestination::Original,
+        };
+        // Start entering path if switching to custom
+        self.restore_confirm.entering_path =
+            self.restore_confirm.destination == RestoreDestination::Custom;
+    }
+
+    /// Confirm and perform the restore
+    pub fn confirm_restore(&mut self) {
+        // Validate custom path if using custom destination
+        if self.restore_confirm.destination == RestoreDestination::Custom {
+            let custom = self.restore_confirm.custom_path.trim();
+            if custom.is_empty() {
+                self.message = Some(("Please enter a destination path".to_string(), true));
+                return;
+            }
+            let path = expand_path(custom);
+            if !path.exists() {
+                // Try to create it
+                if let Err(e) = fs::create_dir_all(&path) {
+                    self.message = Some((format!("Cannot create directory: {}", e), true));
+                    return;
+                }
+            }
+            if !path.is_dir() {
+                self.message = Some(("Destination must be a directory".to_string(), true));
+                return;
+            }
+        }
+
+        // Check if password needed
+        let needs_password = self
+            .restore_confirm
+            .files_to_restore
             .iter()
             .any(|&i| self.restore_files.get(i).map(|f| f.encrypted).unwrap_or(false));
 
         if needs_password && self.encryption_password.is_none() {
+            // Store indices before showing password prompt
+            self.restore_selected = self.restore_confirm.files_to_restore.iter().cloned().collect();
             self.show_password_prompt(PasswordPurpose::Restore);
             return;
         }
 
-        self.perform_restore_with_password();
+        self.perform_restore_internal();
     }
 
-    /// Internal restore with optional password
+    /// Select all files for restore
+    pub fn select_all_restore(&mut self) {
+        self.restore_selected = (0..self.restore_files.len()).collect();
+    }
+
+    /// Deselect all files
+    pub fn deselect_all_restore(&mut self) {
+        self.restore_selected.clear();
+    }
+
+    /// Restore selected files from the selected commit (legacy - now shows confirm dialog)
+    pub fn perform_restore(&mut self) {
+        self.show_restore_confirm();
+    }
+
+    /// Internal restore with optional password (called after password prompt)
     fn perform_restore_with_password(&mut self) {
-        let indices: Vec<usize> = if self.restore_selected.is_empty() {
-            self.restore_list_state.selected().into_iter().collect()
-        } else {
-            self.restore_selected.iter().cloned().collect()
-        };
+        // Re-show the confirm dialog with the files we stored before password prompt
+        if !self.restore_selected.is_empty() {
+            let indices: Vec<usize> = self.restore_selected.iter().cloned().collect();
+            let will_overwrite = indices
+                .iter()
+                .filter(|&&i| {
+                    self.restore_files
+                        .get(i)
+                        .map(|f| f.exists_locally)
+                        .unwrap_or(false)
+                })
+                .count();
+
+            self.restore_confirm = RestoreConfirmState {
+                visible: true,
+                destination: RestoreDestination::Original,
+                custom_path: String::new(),
+                entering_path: false,
+                files_to_restore: indices,
+                will_overwrite,
+                selected_idx: 0,
+                scroll_offset: 0,
+                preview_mode: RestorePreviewMode::FileList,
+            };
+        }
+    }
+
+    /// Actually perform the restore after confirmation
+    fn perform_restore_internal(&mut self) {
+        let indices = std::mem::take(&mut self.restore_confirm.files_to_restore);
+        let destination = self.restore_confirm.destination;
+        let custom_path = std::mem::take(&mut self.restore_confirm.custom_path);
+
+        // Close the dialog
+        self.restore_confirm = RestoreConfirmState::default();
+
+        if indices.is_empty() {
+            return;
+        }
 
         // Get project-specific store directory from selected backup project
         let project_name = match &self.selected_backup_project {
@@ -1408,6 +2013,13 @@ impl App {
             }
         };
 
+        // Resolve custom destination if specified
+        let custom_dest: Option<PathBuf> = if destination == RestoreDestination::Custom {
+            Some(expand_path(custom_path.trim()))
+        } else {
+            None
+        };
+
         let mut restored = 0;
         let mut errors = 0;
 
@@ -1418,18 +2030,40 @@ impl App {
 
             let file = &self.restore_files[i];
 
+            // Determine destination path
+            let dest_path = if let Some(ref base) = custom_dest {
+                // Use filename only when restoring to custom location
+                let filename = file
+                    .restore_path
+                    .file_name()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| file.restore_path.clone());
+                base.join(filename)
+            } else {
+                file.restore_path.clone()
+            };
+
+            // Create parent directory if needed
+            if let Some(parent) = dest_path.parent() {
+                if !parent.exists() {
+                    if let Err(_) = fs::create_dir_all(parent) {
+                        errors += 1;
+                        continue;
+                    }
+                }
+            }
+
             // Use encrypted or regular retrieve from project-specific store
-            // Use restore_path which may be remapped to current home directory
             let result = if file.encrypted {
                 retrieve_file_from_encrypted(
                     &store_dir,
                     &file.hash,
-                    &file.restore_path,
+                    &dest_path,
                     self.encryption_password.as_ref(),
                     true,
                 )
             } else {
-                retrieve_file_from(&store_dir, &file.hash, &file.restore_path)
+                retrieve_file_from(&store_dir, &file.hash, &dest_path)
             };
 
             match result {
@@ -2061,6 +2695,14 @@ impl App {
         self.highlight_content(&content, path)
     }
 
+    /// Load a file into the viewer with a custom title
+    pub fn load_file_into_viewer(&mut self, path: &Path, title: &str) {
+        self.viewer_content = self.load_file_content(path);
+        self.viewer_title = title.to_string();
+        self.viewer_scroll = 0;
+        self.viewer_visible = true;
+    }
+
     /// Load folder as concatenated files with headers (conf.d style)
     fn load_folder_content(&self, path: &Path) -> Vec<ViewerLine> {
         let entries = match fs::read_dir(path) {
@@ -2165,6 +2807,11 @@ impl App {
     /// Scroll viewer to bottom
     pub fn viewer_scroll_bottom(&mut self) {
         self.viewer_scroll = self.viewer_content.len().saturating_sub(10);
+    }
+
+    /// Toggle line numbers in viewer
+    pub fn toggle_viewer_line_numbers(&mut self) {
+        self.viewer_line_numbers = !self.viewer_line_numbers;
     }
 }
 

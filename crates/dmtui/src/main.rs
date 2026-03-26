@@ -5,7 +5,7 @@
 
 mod app;
 
-use app::{format_size, App, Mode, PasswordPurpose, RestoreView};
+use app::{format_size, App, Mode, PasswordPurpose, RestoreDestination, RestoreView};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -135,6 +135,9 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::End | KeyCode::Char('G') => {
                         app.viewer_scroll_bottom();
+                    }
+                    KeyCode::Char('n') => {
+                        app.toggle_viewer_line_numbers();
                     }
                     _ => {}
                 }
@@ -268,6 +271,105 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
+            // Restore confirmation mode
+            if app.restore_confirm.visible {
+                // If viewer is open (for backup/local/diff), handle viewer keys
+                if app.viewer_visible {
+                    match key.code {
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.viewer_scroll = app.viewer_scroll.saturating_add(1);
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.viewer_scroll = app.viewer_scroll.saturating_sub(1);
+                        }
+                        KeyCode::PageDown => {
+                            app.viewer_scroll = app.viewer_scroll.saturating_add(20);
+                        }
+                        KeyCode::PageUp => {
+                            app.viewer_scroll = app.viewer_scroll.saturating_sub(20);
+                        }
+                        KeyCode::Char('g') | KeyCode::Home => {
+                            app.viewer_scroll = 0;
+                        }
+                        KeyCode::Char('G') | KeyCode::End => {
+                            app.viewer_scroll = app.viewer_content.len().saturating_sub(1);
+                        }
+                        KeyCode::Char('n') => {
+                            app.toggle_viewer_line_numbers();
+                        }
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => {
+                            app.close_restore_preview();
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                if app.restore_confirm.entering_path {
+                    // Path input mode
+                    match key.code {
+                        KeyCode::Enter => {
+                            app.restore_confirm.entering_path = false;
+                        }
+                        KeyCode::Esc => {
+                            app.restore_confirm.entering_path = false;
+                            app.restore_confirm.custom_path.clear();
+                            app.restore_confirm.destination = RestoreDestination::Original;
+                        }
+                        KeyCode::Backspace => {
+                            app.restore_confirm.custom_path.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.restore_confirm.custom_path.push(c);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.confirm_restore();
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                            app.cancel_restore_confirm();
+                        }
+                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                            // Original location
+                            app.restore_confirm.destination = RestoreDestination::Original;
+                            app.restore_confirm.entering_path = false;
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            // Custom location - start entering path
+                            app.restore_confirm.destination = RestoreDestination::Custom;
+                            app.restore_confirm.entering_path = true;
+                        }
+                        KeyCode::Tab => {
+                            app.toggle_restore_destination();
+                        }
+                        // Navigation in file list
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.restore_confirm_up();
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.restore_confirm_down();
+                        }
+                        // View backup file
+                        KeyCode::Char('b') | KeyCode::Char('B') => {
+                            app.view_restore_backup();
+                        }
+                        // View local file
+                        KeyCode::Char('l') | KeyCode::Char('L') => {
+                            app.view_restore_local();
+                        }
+                        // View diff
+                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                            app.view_restore_diff();
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+
             // Global keys
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
@@ -371,6 +473,10 @@ fn handle_projects_keys(app: &mut App, key: KeyCode) {
         KeyCode::Char('B') => {
             // Backup with custom commit message
             app.backup_project_with_message();
+        }
+        KeyCode::Char('a') => {
+            // Create archive backup (tar.gz/zip)
+            app.backup_project_archive();
         }
         KeyCode::Char('s') => {
             app.sync_project();
@@ -550,7 +656,7 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
             // Untrack selected file
             if let Some(idx) = app.browse_list_state.selected() {
                 if let Some(file) = app.browse_files.get(idx) {
-                    if file.is_tracked && !file.is_dir {
+                    if file.is_tracked() && !file.is_dir {
                         let path = file.path.clone();
                         app.untrack_file(&path);
                     }
@@ -745,6 +851,14 @@ fn handle_restore_keys(app: &mut App, key: KeyCode) {
                 KeyCode::Char('v') => {
                     app.open_viewer();
                 }
+                KeyCode::Char('a') => {
+                    // Select all
+                    app.select_all_restore();
+                }
+                KeyCode::Char('d') => {
+                    // Deselect all
+                    app.deselect_all_restore();
+                }
                 _ => {}
             }
         }
@@ -798,8 +912,8 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Status bar
     render_status_bar(f, app, chunks[2]);
 
-    // File viewer overlay
-    if app.viewer_visible {
+    // File viewer overlay (when not in restore confirm mode)
+    if app.viewer_visible && !app.restore_confirm.visible {
         render_viewer(f, app);
     }
 
@@ -836,6 +950,15 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Delete confirmation overlay
     if app.confirm_delete {
         render_delete_confirm(f, app);
+    }
+
+    // Restore confirmation overlay
+    if app.restore_confirm.visible {
+        render_restore_confirm(f, app);
+        // Render viewer ON TOP of restore confirm if viewing backup/local/diff
+        if app.viewer_visible {
+            render_viewer(f, app);
+        }
     }
 
     // Password prompt overlay
@@ -1003,25 +1126,45 @@ fn render_add(f: &mut Frame, app: &mut App, area: Rect) {
         .browse_files
         .iter()
         .map(|file| {
-            let icon = if file.is_dir { "/" } else { " " };
             let size_str = file
                 .size
                 .map(|s| format!(" {:>8}", format_size(s)))
                 .unwrap_or_default();
 
-            if file.is_tracked {
-                // Already tracked - show in yellow with checkmark
+            if file.is_dir {
+                // Directory - show with project info if it contains tracked files
+                if file.is_tracked() {
+                    let projects_str = if file.tracked_in.len() == 1 {
+                        format!(" [{}]", file.tracked_in[0])
+                    } else if file.tracked_in.len() <= 3 {
+                        format!(" [{}]", file.tracked_in.join(", "))
+                    } else {
+                        format!(" [{}, +{}]", file.tracked_in[0], file.tracked_in.len() - 1)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(" ✓ ", Style::default().fg(Color::Green)),
+                        Span::styled(format!("{}/", &file.name), Style::default().fg(Color::Blue)),
+                        Span::styled(projects_str, Style::default().fg(Color::Cyan)),
+                    ]))
+                } else {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(" / ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}/", &file.name), Style::default().fg(Color::Blue)),
+                    ]))
+                }
+            } else if file.is_tracked() {
+                // File already tracked - show with checkmark and project name(s)
+                let projects_str = if file.tracked_in.len() == 1 {
+                    format!(" [{}]", file.tracked_in[0])
+                } else {
+                    format!(" [{}]", file.tracked_in.join(", "))
+                };
+
                 ListItem::new(Line::from(vec![
                     Span::styled(" ✓ ", Style::default().fg(Color::Green)),
                     Span::styled(&file.name, Style::default().fg(Color::Yellow)),
                     Span::styled(size_str, Style::default().fg(Color::DarkGray)),
-                ]))
-            } else if file.is_dir {
-                // Directory
-                ListItem::new(Line::from(vec![
-                    Span::styled(icon, Style::default().fg(Color::Blue)),
-                    Span::styled(&file.name, Style::default().fg(Color::Blue)),
-                    Span::styled(size_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(projects_str, Style::default().fg(Color::Cyan)),
                 ]))
             } else {
                 // Regular file - show track mode badge
@@ -1294,7 +1437,7 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
                 RestoreView::Projects => "↑↓:select  Enter:view backups  r:refresh  ?:help  q:quit",
                 RestoreView::Commits => "↑↓:select  Enter:view files  h:back  r:refresh  ?:help",
                 RestoreView::Files => {
-                    "↑↓:select  Space:multi  Enter:restore  v:view  h:back  ?:help"
+                    "↑↓:nav  Space:select  a:all  d:none  Enter:restore  v:view  h:back  ?:help"
                 }
             },
         };
@@ -1316,24 +1459,29 @@ fn render_viewer(f: &mut Frame, app: &App) {
     // Clear the area completely (removes any content behind)
     f.render_widget(Clear, area);
 
+    // Split area for content and footer
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+
+    let content_area = chunks[0];
+    let footer_area = chunks[1];
+
     // Get visible lines based on scroll
-    let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+    let visible_height = content_area.height.saturating_sub(2) as usize; // Account for borders
     let start = app.viewer_scroll;
     let end = (start + visible_height).min(app.viewer_content.len());
     let visible_lines = &app.viewer_content[start..end];
 
-    // Build paragraph from ViewerLine spans
-    let lines: Vec<Line> = visible_lines
-        .iter()
-        .map(|vl| {
-            let spans: Vec<Span> = vl
-                .spans
-                .iter()
-                .map(|(text, style)| Span::styled(text.clone(), *style))
-                .collect();
-            Line::from(spans)
-        })
-        .collect();
+    // Calculate line number width (digits + separator)
+    let total_lines = app.viewer_content.len();
+    let line_num_digits = if total_lines > 0 {
+        total_lines.to_string().len()
+    } else {
+        1
+    };
+    let gutter_width = line_num_digits + 3; // digits + " │ "
 
     // Build title with scroll info
     let scroll_info = format!(
@@ -1343,18 +1491,110 @@ fn render_viewer(f: &mut Frame, app: &App) {
         app.viewer_content.len()
     );
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(scroll_info)
-                .border_style(Style::default().fg(Color::Cyan))
-                .style(Style::default().bg(Color::Black)),
-        )
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(Color::Black));
+    if app.viewer_line_numbers {
+        // Split content area into line numbers gutter and content
+        let inner_area = Block::default()
+            .borders(Borders::ALL)
+            .title(scroll_info.clone())
+            .border_style(Style::default().fg(Color::Cyan))
+            .inner(content_area);
 
-    f.render_widget(paragraph, area);
+        let h_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(gutter_width as u16),
+                Constraint::Min(1),
+            ])
+            .split(inner_area);
+
+        let gutter_area = h_chunks[0];
+        let text_area = h_chunks[1];
+
+        // Render the border/background first
+        let border_block = Block::default()
+            .borders(Borders::ALL)
+            .title(scroll_info)
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(border_block, content_area);
+
+        // Build line numbers
+        let line_nums: Vec<Line> = visible_lines
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| {
+                let actual_line = start + idx + 1;
+                Line::from(Span::styled(
+                    format!("{:>width$} │", actual_line, width = line_num_digits),
+                    Style::default().fg(Color::DarkGray),
+                ))
+            })
+            .collect();
+
+        let gutter = Paragraph::new(line_nums)
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(gutter, gutter_area);
+
+        // Build content lines (without line numbers)
+        let content_lines: Vec<Line> = visible_lines
+            .iter()
+            .map(|vl| {
+                let spans: Vec<Span> = vl
+                    .spans
+                    .iter()
+                    .map(|(text, style)| Span::styled(text.clone(), *style))
+                    .collect();
+                Line::from(spans)
+            })
+            .collect();
+
+        let content = Paragraph::new(content_lines)
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(Color::Black));
+        f.render_widget(content, text_area);
+    } else {
+        // No line numbers - simple render with wrap
+        let lines: Vec<Line> = visible_lines
+            .iter()
+            .map(|vl| {
+                let spans: Vec<Span> = vl
+                    .spans
+                    .iter()
+                    .map(|(text, style)| Span::styled(text.clone(), *style))
+                    .collect();
+                Line::from(spans)
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(scroll_info)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .style(Style::default().bg(Color::Black)),
+            )
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(Color::Black));
+
+        f.render_widget(paragraph, content_area);
+    }
+
+    // Render footer with hints
+    let line_num_status = if app.viewer_line_numbers { "ON" } else { "OFF" };
+    let footer = Line::from(vec![
+        Span::styled(" ↑↓", Style::default().fg(Color::Cyan)),
+        Span::raw(":scroll  "),
+        Span::styled("g/G", Style::default().fg(Color::Cyan)),
+        Span::raw(":top/bottom  "),
+        Span::styled("n", Style::default().fg(Color::Cyan)),
+        Span::styled(format!(":line# [{}]  ", line_num_status), Style::default().fg(Color::Gray)),
+        Span::styled("q/Esc", Style::default().fg(Color::Cyan)),
+        Span::raw(":close"),
+    ]);
+    let footer_para = Paragraph::new(footer)
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(footer_para, footer_area);
 }
 
 fn render_help(f: &mut Frame, _app: &App) {
@@ -1381,6 +1621,7 @@ fn render_help(f: &mut Frame, _app: &App) {
  PgUp/PgDn  Page up/down
  g/Home     Go to top
  G/End      Go to bottom
+ n          Toggle line numbers
  v/q/Esc    Close viewer
 
  PROJECTS TAB
@@ -1390,8 +1631,9 @@ fn render_help(f: &mut Frame, _app: &App) {
  m          Toggle track mode
  x          Toggle encryption
  X          Encrypt project
- b          Backup project
+ b          Backup (incremental)
  B          Backup w/ message
+ a          Archive backup
  s          Sync project
  S          Save now (live)
  n          New project
@@ -1436,11 +1678,25 @@ fn render_help(f: &mut Frame, _app: &App) {
 
  RESTORE - FILES
  ───────────────────────────
- Space      Toggle multi-select
- Enter/R    Restore file(s)
+ Space      Toggle selection
+ a          Select all
+ d          Deselect all
+ Enter/R    Restore (confirm)
  v          View file content
  ←/h/Bksp   Back to commits
  r          Refresh
+
+ RESTORE CONFIRMATION
+ ───────────────────────────
+ ↑/k ↓/j    Navigate files
+ b          View backup file
+ l          View local file
+ d          View diff
+ Y/Enter    Confirm restore
+ N/Esc      Cancel
+ O          Original location
+ C          Custom location
+ Tab        Toggle destination
 
  TRACK MODES
  ───────────────────────────
@@ -1823,6 +2079,212 @@ fn render_delete_confirm(f: &mut Frame, app: &App) {
             .borders(Borders::ALL)
             .title(" Confirm Delete ")
             .border_style(Style::default().fg(Color::Red))
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(paragraph, area);
+}
+
+fn render_restore_confirm(f: &mut Frame, app: &App) {
+    let area = centered_rect(75, 70, f.area());
+
+    let file_count = app.restore_confirm.files_to_restore.len();
+    let will_overwrite = app.restore_confirm.will_overwrite;
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Restore Confirmation",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    // File count summary
+    lines.push(Line::from(vec![
+        Span::raw("  Files to restore: "),
+        Span::styled(
+            format!("{}", file_count),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        if will_overwrite > 0 {
+            Span::styled(
+                format!("⚠ {} will overwrite", will_overwrite),
+                Style::default().fg(Color::Yellow),
+            )
+        } else {
+            Span::styled(
+                "✓ No overwrites",
+                Style::default().fg(Color::Green),
+            )
+        },
+    ]));
+
+    lines.push(Line::from(""));
+
+    // File list header
+    lines.push(Line::from(vec![
+        Span::styled("  FILES ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled("(↑↓ select)", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("b", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("=view backup  ", Style::default().fg(Color::Gray)),
+        Span::styled("l", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("=view local  ", Style::default().fg(Color::Gray)),
+        Span::styled("d", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("=view diff", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Show files (up to ~15 visible)
+    let max_visible = 12;
+    let selected = app.restore_confirm.selected_idx;
+    let scroll = if selected >= max_visible {
+        selected - max_visible + 1
+    } else {
+        0
+    };
+
+    for (display_idx, &file_idx) in app.restore_confirm.files_to_restore.iter().enumerate().skip(scroll).take(max_visible) {
+        if let Some(file) = app.restore_files.get(file_idx) {
+            let is_selected = display_idx == selected;
+            let marker = if is_selected { "▶" } else { " " };
+
+            // Status indicator
+            let status = if !file.exists_locally {
+                Span::styled("NEW ", Style::default().fg(Color::Cyan))
+            } else if file.local_differs {
+                Span::styled("CHG ", Style::default().fg(Color::Yellow))
+            } else {
+                Span::styled("OK  ", Style::default().fg(Color::Green))
+            };
+
+            // Path (truncate if too long)
+            let max_path_len = 50;
+            let path_display = if file.display_path.len() > max_path_len {
+                format!("...{}", &file.display_path[file.display_path.len() - max_path_len + 3..])
+            } else {
+                file.display_path.clone()
+            };
+
+            let path_style = if is_selected {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if file.exists_locally && file.local_differs {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} ", marker), Style::default().fg(Color::Cyan)),
+                status,
+                Span::styled(path_display, path_style),
+            ]));
+        }
+    }
+
+    // Show scroll indicator if needed
+    if file_count > max_visible {
+        lines.push(Line::from(Span::styled(
+            format!("  ... ({}/{} shown, scroll with ↑↓)", max_visible.min(file_count), file_count),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Destination options
+    lines.push(Line::from(Span::styled(
+        "  DESTINATION:",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )));
+
+    // Original location option
+    let orig_style = if app.restore_confirm.destination == RestoreDestination::Original {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let orig_marker = if app.restore_confirm.destination == RestoreDestination::Original {
+        "●"
+    } else {
+        "○"
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {} ", orig_marker), orig_style),
+        Span::styled("[O]", Style::default().fg(Color::Cyan)),
+        Span::styled(" Original location", orig_style),
+    ]));
+
+    // Custom location option
+    let custom_style = if app.restore_confirm.destination == RestoreDestination::Custom {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let custom_marker = if app.restore_confirm.destination == RestoreDestination::Custom {
+        "●"
+    } else {
+        "○"
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {} ", custom_marker), custom_style),
+        Span::styled("[C]", Style::default().fg(Color::Cyan)),
+        Span::styled(" Custom location", custom_style),
+    ]));
+
+    // Show path input if custom is selected
+    if app.restore_confirm.destination == RestoreDestination::Custom {
+        let cursor = if app.restore_confirm.entering_path { "█" } else { "" };
+        let path_display = if app.restore_confirm.custom_path.is_empty() {
+            "~/...".to_string()
+        } else {
+            app.restore_confirm.custom_path.clone()
+        };
+        let input_style = if app.restore_confirm.entering_path {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(vec![
+            Span::raw("      Path: "),
+            Span::styled(format!("{}{}", path_display, cursor), input_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ─────────────────────────────────────────────────────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // Actions
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("Y/Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(": Restore  "),
+        Span::styled("N/Esc", Style::default().fg(Color::Red)),
+        Span::raw(": Cancel  "),
+        Span::styled("Tab", Style::default().fg(Color::Cyan)),
+        Span::raw(": Toggle dest"),
+    ]));
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Restore Files ")
+            .border_style(Style::default().fg(Color::Cyan))
             .style(Style::default().bg(Color::Black)),
     );
 

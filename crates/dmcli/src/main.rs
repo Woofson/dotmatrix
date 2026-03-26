@@ -212,7 +212,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn cmd_init() -> anyhow::Result<()> {
-    println!("dotmatrix 2.0 - project compositor with git versioning");
+    println!("dotmatrix 2.0.0 - project compositor with git versioning");
     println!();
 
     let config = Config::load()?;
