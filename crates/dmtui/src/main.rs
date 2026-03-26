@@ -254,6 +254,20 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
+            // Delete confirmation mode
+            if app.confirm_delete {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                        app.confirm_delete_project();
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                        app.cancel_delete();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             // Global keys
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
@@ -368,8 +382,8 @@ fn handle_projects_keys(app: &mut App, key: KeyCode) {
         KeyCode::Char('n') => {
             app.start_create_project();
         }
-        KeyCode::Char('d') | KeyCode::Delete => {
-            app.delete_selected_project();
+        KeyCode::Char('D') => {
+            app.start_delete_project();
         }
         KeyCode::Char('x') => {
             app.toggle_encryption();
@@ -817,6 +831,11 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Recursive preview overlay
     if app.recursive_preview.is_some() {
         render_recursive_preview(f, app);
+    }
+
+    // Delete confirmation overlay
+    if app.confirm_delete {
+        render_delete_confirm(f, app);
     }
 
     // Password prompt overlay
@@ -1376,7 +1395,7 @@ fn render_help(f: &mut Frame, _app: &App) {
  s          Sync project
  S          Save now (live)
  n          New project
- d/Del      Delete project
+ D          Delete project
  r          Refresh
  g          Refresh git status
  G          Set git remote
@@ -1762,6 +1781,53 @@ fn render_recursive_preview(f: &mut Frame, app: &mut App) {
     let footer = Paragraph::new(" Space: toggle  a: all  t: mode  T: all mode  Enter: add  Esc: cancel")
         .style(Style::default().fg(Color::Cyan).bg(Color::Black));
     f.render_widget(footer, chunks[2]);
+}
+
+fn render_delete_confirm(f: &mut Frame, app: &App) {
+    let area = centered_rect(50, 20, f.area());
+
+    let project_name = app.delete_target.as_deref().unwrap_or("unknown");
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Are you sure you want to delete this project?",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Project: "),
+            Span::styled(project_name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  This will remove the project from the manifest.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Backup data will NOT be deleted.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Y/Enter", Style::default().fg(Color::Red)),
+            Span::raw(": Delete  "),
+            Span::styled("N/Esc", Style::default().fg(Color::Green)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Confirm Delete ")
+            .border_style(Style::default().fg(Color::Red))
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(paragraph, area);
 }
 
 fn render_password_prompt(f: &mut Frame, app: &App) {

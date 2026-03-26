@@ -253,6 +253,10 @@ pub struct App {
     pub creating_project: bool,
     pub project_input: String,
 
+    // Delete confirmation state
+    pub confirm_delete: bool,
+    pub delete_target: Option<String>, // Project name to delete
+
     // Git remote configuration state
     pub setting_remote: bool,
     pub remote_input: String,
@@ -340,6 +344,8 @@ impl App {
             index_dirty: false,
             creating_project: false,
             project_input: String::new(),
+            confirm_delete: false,
+            delete_target: None,
             setting_remote: false,
             remote_input: String::new(),
             entering_commit_msg: false,
@@ -1629,8 +1635,8 @@ impl App {
         self.refresh_remote_status();
     }
 
-    /// Delete the selected project
-    pub fn delete_selected_project(&mut self) {
+    /// Show delete confirmation for the selected project
+    pub fn start_delete_project(&mut self) {
         let name = match self.selected_project_name() {
             Some(n) => n,
             None => {
@@ -1638,6 +1644,24 @@ impl App {
                 return;
             }
         };
+
+        self.delete_target = Some(name);
+        self.confirm_delete = true;
+    }
+
+    /// Cancel delete confirmation
+    pub fn cancel_delete(&mut self) {
+        self.confirm_delete = false;
+        self.delete_target = None;
+    }
+
+    /// Confirm and delete the project
+    pub fn confirm_delete_project(&mut self) {
+        let name = match self.delete_target.take() {
+            Some(n) => n,
+            None => return,
+        };
+        self.confirm_delete = false;
 
         self.manifest.projects.remove(&name);
         self.manifest_dirty = true;
