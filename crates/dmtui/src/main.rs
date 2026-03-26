@@ -5,7 +5,7 @@
 
 mod app;
 
-use app::{format_size, App, Mode};
+use app::{format_size, App, Mode, PasswordPurpose, RestoreView};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -106,21 +106,180 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
+            // About mode
+            if app.show_about {
+                app.show_about = false;
+                continue;
+            }
+
+            // File viewer mode
+            if app.viewer_visible {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => {
+                        app.close_viewer();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.viewer_scroll_down(1);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.viewer_scroll_up(1);
+                    }
+                    KeyCode::PageDown => {
+                        app.viewer_scroll_down(PAGE_SIZE);
+                    }
+                    KeyCode::PageUp => {
+                        app.viewer_scroll_up(PAGE_SIZE);
+                    }
+                    KeyCode::Home | KeyCode::Char('g') => {
+                        app.viewer_scroll_top();
+                    }
+                    KeyCode::End | KeyCode::Char('G') => {
+                        app.viewer_scroll_bottom();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Project creation input mode
+            if app.creating_project {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_create_project();
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_create_project();
+                    }
+                    KeyCode::Backspace => {
+                        app.project_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.project_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Git remote configuration mode
+            if app.setting_remote {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_set_remote();
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_set_remote();
+                    }
+                    KeyCode::Backspace => {
+                        app.remote_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.remote_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Custom commit message mode
+            if app.entering_commit_msg {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_commit_msg();
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_commit_msg();
+                    }
+                    KeyCode::Backspace => {
+                        app.commit_msg_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.commit_msg_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Recursive preview mode
+            if app.recursive_preview.is_some() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        app.cancel_recursive_preview();
+                    }
+                    KeyCode::Enter => {
+                        app.confirm_recursive_add();
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.preview_next();
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.preview_previous();
+                    }
+                    KeyCode::Char(' ') => {
+                        app.toggle_preview_file();
+                        app.preview_next();
+                    }
+                    KeyCode::Char('a') => {
+                        app.toggle_all_preview_files();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Password prompt mode
+            if app.password_prompt_visible {
+                match key.code {
+                    KeyCode::Enter => {
+                        app.confirm_password();
+                    }
+                    KeyCode::Esc => {
+                        app.cancel_password();
+                    }
+                    KeyCode::Backspace => {
+                        app.password_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        app.password_input.push(c);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
             // Global keys
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::Char('?') => app.show_help = true,
+                KeyCode::Char('A') => app.show_about = true,
                 KeyCode::Tab => {
                     let next = (app.mode.index() + 1) % 3;
                     app.mode = Mode::from_index(next);
+                    // Reset restore view when entering Restore tab
+                    if app.mode == Mode::Restore {
+                        app.restore_view = RestoreView::Projects;
+                        app.restore_selected.clear();
+                        app.scan_backup_projects();
+                    }
                 }
                 KeyCode::BackTab => {
                     let prev = (app.mode.index() + 2) % 3;
                     app.mode = Mode::from_index(prev);
+                    if app.mode == Mode::Restore {
+                        app.restore_view = RestoreView::Projects;
+                        app.restore_selected.clear();
+                        app.scan_backup_projects();
+                    }
                 }
                 KeyCode::Char('1') => app.mode = Mode::Projects,
                 KeyCode::Char('2') => app.mode = Mode::Add,
-                KeyCode::Char('3') => app.mode = Mode::Restore,
+                KeyCode::Char('3') => {
+                    app.mode = Mode::Restore;
+                    app.restore_view = RestoreView::Projects;
+                    app.restore_selected.clear();
+                    app.scan_backup_projects();
+                }
                 _ => {
                     // Mode-specific keys
                     match app.mode {
@@ -138,38 +297,60 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
     }
 }
 
+const PAGE_SIZE: usize = 10;
+
 fn handle_projects_keys(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Down | KeyCode::Char('j') => {
-            if !app.projects.is_empty() {
+            if !app.visible_items.is_empty() {
                 let i = app.project_list_state.selected().unwrap_or(0);
-                let next = (i + 1).min(app.projects.len() - 1);
+                let next = (i + 1).min(app.visible_items.len() - 1);
                 app.project_list_state.select(Some(next));
-                app.selected_project = Some(next);
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if !app.projects.is_empty() {
+            if !app.visible_items.is_empty() {
                 let i = app.project_list_state.selected().unwrap_or(0);
                 let prev = i.saturating_sub(1);
                 app.project_list_state.select(Some(prev));
-                app.selected_project = Some(prev);
+            }
+        }
+        KeyCode::PageDown => {
+            if !app.visible_items.is_empty() {
+                let i = app.project_list_state.selected().unwrap_or(0);
+                let next = (i + PAGE_SIZE).min(app.visible_items.len() - 1);
+                app.project_list_state.select(Some(next));
+            }
+        }
+        KeyCode::PageUp => {
+            if !app.visible_items.is_empty() {
+                let i = app.project_list_state.selected().unwrap_or(0);
+                let prev = i.saturating_sub(PAGE_SIZE);
+                app.project_list_state.select(Some(prev));
+            }
+        }
+        KeyCode::Home => {
+            if !app.visible_items.is_empty() {
+                app.project_list_state.select(Some(0));
+            }
+        }
+        KeyCode::End => {
+            if !app.visible_items.is_empty() {
+                app.project_list_state.select(Some(app.visible_items.len() - 1));
             }
         }
         KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
-            if let Some(idx) = app.selected_project {
-                app.toggle_project(idx);
-            }
+            app.toggle_selected_project();
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            if let Some(idx) = app.selected_project {
-                if app.projects.get(idx).map(|p| p.expanded).unwrap_or(false) {
-                    app.toggle_project(idx);
-                }
-            }
+            app.collapse_selected_project();
         }
         KeyCode::Char('b') => {
             app.backup_project();
+        }
+        KeyCode::Char('B') => {
+            // Backup with custom commit message
+            app.backup_project_with_message();
         }
         KeyCode::Char('s') => {
             app.sync_project();
@@ -177,6 +358,72 @@ fn handle_projects_keys(app: &mut App, key: KeyCode) {
         KeyCode::Char('r') => {
             app.refresh_projects();
             app.message = Some(("Refreshed".to_string(), false));
+        }
+        KeyCode::Char('n') => {
+            app.start_create_project();
+        }
+        KeyCode::Char('d') | KeyCode::Delete => {
+            app.delete_selected_project();
+        }
+        KeyCode::Char('x') => {
+            app.toggle_encryption();
+        }
+        KeyCode::Char('X') => {
+            // Toggle encryption for all files in project
+            app.toggle_project_encryption();
+        }
+        KeyCode::Char('m') | KeyCode::Char('M') => {
+            app.toggle_track_mode();
+        }
+        KeyCode::Char('S') => {
+            app.save_and_reload();
+        }
+        KeyCode::Char('g') => {
+            app.refresh_remote_status();
+        }
+        KeyCode::Char('G') => {
+            // Set git remote URL
+            app.start_set_remote();
+        }
+        KeyCode::Char('p') => {
+            // Push to remote (project-specific)
+            if let Some(name) = app.selected_project_name() {
+                if let Ok(project_dir) = app.config.project_dir(&name) {
+                    if dmcore::is_git_repo(&project_dir) {
+                        match dmcore::push(&project_dir) {
+                            Ok(msg) => app.message = Some((msg, false)),
+                            Err(e) => app.message = Some((e.to_string(), true)),
+                        }
+                        app.refresh_remote_status();
+                    } else {
+                        app.message = Some(("No git repo for project. Backup first.".to_string(), true));
+                    }
+                }
+            } else {
+                app.message = Some(("No project selected".to_string(), true));
+            }
+        }
+        KeyCode::Char('P') => {
+            // Pull from remote (project-specific)
+            if let Some(name) = app.selected_project_name() {
+                if let Ok(project_dir) = app.config.project_dir(&name) {
+                    if dmcore::is_git_repo(&project_dir) {
+                        match dmcore::pull(&project_dir) {
+                            Ok(msg) => app.message = Some((msg, false)),
+                            Err(e) => app.message = Some((e.to_string(), true)),
+                        }
+                        app.refresh_remote_status();
+                        app.scan_backup_projects();
+                    } else {
+                        app.message = Some(("No git repo for project. Backup first.".to_string(), true));
+                    }
+                }
+            } else {
+                app.message = Some(("No project selected".to_string(), true));
+            }
+        }
+        KeyCode::Char('v') => {
+            app.open_viewer();
         }
         _ => {}
     }
@@ -198,6 +445,30 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
                 app.browse_list_state.select(Some(prev));
             }
         }
+        KeyCode::PageDown => {
+            if !app.browse_files.is_empty() {
+                let i = app.browse_list_state.selected().unwrap_or(0);
+                let next = (i + PAGE_SIZE).min(app.browse_files.len() - 1);
+                app.browse_list_state.select(Some(next));
+            }
+        }
+        KeyCode::PageUp => {
+            if !app.browse_files.is_empty() {
+                let i = app.browse_list_state.selected().unwrap_or(0);
+                let prev = i.saturating_sub(PAGE_SIZE);
+                app.browse_list_state.select(Some(prev));
+            }
+        }
+        KeyCode::Home => {
+            if !app.browse_files.is_empty() {
+                app.browse_list_state.select(Some(0));
+            }
+        }
+        KeyCode::End => {
+            if !app.browse_files.is_empty() {
+                app.browse_list_state.select(Some(app.browse_files.len() - 1));
+            }
+        }
         KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
             if let Some(idx) = app.browse_list_state.selected() {
                 if let Some(file) = app.browse_files.get(idx) {
@@ -211,10 +482,14 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
             }
         }
         KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
-            let parent = app.browse_dir.parent().map(|p| p.to_path_buf());
-            if let Some(p) = parent {
-                app.browse_dir = p;
+            let previous_dir = app.browse_dir.clone();
+            if let Some(parent) = app.browse_dir.parent().map(|p| p.to_path_buf()) {
+                app.browse_dir = parent;
                 app.refresh_browse();
+                // Find and select the directory we came from
+                if let Some(idx) = app.browse_files.iter().position(|f| f.path == previous_dir) {
+                    app.browse_list_state.select(Some(idx));
+                }
             }
         }
         KeyCode::Char('a') => {
@@ -235,44 +510,213 @@ fn handle_add_keys(app: &mut App, key: KeyCode) {
                 app.refresh_browse();
             }
         }
+        KeyCode::Char('p') => {
+            // Cycle target project
+            app.cycle_target_project();
+        }
+        KeyCode::Char('n') => {
+            // Create new project
+            app.start_create_project();
+        }
+        KeyCode::Char('R') => {
+            // Recursive add
+            app.start_recursive_preview();
+        }
+        KeyCode::Char('t') => {
+            // Cycle track mode for adding files
+            app.cycle_add_track_mode();
+        }
+        KeyCode::Char('v') => {
+            app.open_viewer();
+        }
         _ => {}
     }
 }
 
 fn handle_restore_keys(app: &mut App, key: KeyCode) {
-    match key {
-        KeyCode::Down | KeyCode::Char('j') => {
-            if !app.restore_files.is_empty() {
-                let i = app.restore_list_state.selected().unwrap_or(0);
-                let next = (i + 1).min(app.restore_files.len() - 1);
-                app.restore_list_state.select(Some(next));
+    match app.restore_view {
+        RestoreView::Projects => {
+            match key {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !app.backup_projects.is_empty() {
+                        let i = app.backup_project_list_state.selected().unwrap_or(0);
+                        let next = (i + 1).min(app.backup_projects.len() - 1);
+                        app.backup_project_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if !app.backup_projects.is_empty() {
+                        let i = app.backup_project_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(1);
+                        app.backup_project_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::PageDown => {
+                    if !app.backup_projects.is_empty() {
+                        let i = app.backup_project_list_state.selected().unwrap_or(0);
+                        let next = (i + PAGE_SIZE).min(app.backup_projects.len() - 1);
+                        app.backup_project_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::PageUp => {
+                    if !app.backup_projects.is_empty() {
+                        let i = app.backup_project_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(PAGE_SIZE);
+                        app.backup_project_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::Home => {
+                    if !app.backup_projects.is_empty() {
+                        app.backup_project_list_state.select(Some(0));
+                    }
+                }
+                KeyCode::End => {
+                    if !app.backup_projects.is_empty() {
+                        app.backup_project_list_state.select(Some(app.backup_projects.len() - 1));
+                    }
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    // Select project and view its commits
+                    app.select_backup_project();
+                }
+                KeyCode::Char('r') => {
+                    // Refresh backup projects
+                    app.scan_backup_projects();
+                    app.message = Some(("Refreshed".to_string(), false));
+                }
+                _ => {}
             }
         }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if !app.restore_files.is_empty() {
-                let i = app.restore_list_state.selected().unwrap_or(0);
-                let prev = i.saturating_sub(1);
-                app.restore_list_state.select(Some(prev));
+        RestoreView::Commits => {
+            match key {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !app.commits.is_empty() {
+                        let i = app.commit_list_state.selected().unwrap_or(0);
+                        let next = (i + 1).min(app.commits.len() - 1);
+                        app.commit_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if !app.commits.is_empty() {
+                        let i = app.commit_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(1);
+                        app.commit_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::PageDown => {
+                    if !app.commits.is_empty() {
+                        let i = app.commit_list_state.selected().unwrap_or(0);
+                        let next = (i + PAGE_SIZE).min(app.commits.len() - 1);
+                        app.commit_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::PageUp => {
+                    if !app.commits.is_empty() {
+                        let i = app.commit_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(PAGE_SIZE);
+                        app.commit_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::Home => {
+                    if !app.commits.is_empty() {
+                        app.commit_list_state.select(Some(0));
+                    }
+                }
+                KeyCode::End => {
+                    if !app.commits.is_empty() {
+                        app.commit_list_state.select(Some(app.commits.len() - 1));
+                    }
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    // Select commit and view its files
+                    app.select_commit();
+                }
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
+                    // Go back to projects
+                    app.back_to_backup_projects();
+                }
+                KeyCode::Char('r') => {
+                    // Refresh commits
+                    if let Some(name) = app.selected_backup_project.clone() {
+                        app.load_commits_for_project(&name);
+                    }
+                    app.message = Some(("Refreshed".to_string(), false));
+                }
+                _ => {}
             }
         }
-        KeyCode::Enter | KeyCode::Char('R') => {
-            // Restore selected file
-            app.restore_selected_file();
+        RestoreView::Files => {
+            match key {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !app.restore_files.is_empty() {
+                        let i = app.restore_list_state.selected().unwrap_or(0);
+                        let next = (i + 1).min(app.restore_files.len() - 1);
+                        app.restore_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if !app.restore_files.is_empty() {
+                        let i = app.restore_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(1);
+                        app.restore_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::PageDown => {
+                    if !app.restore_files.is_empty() {
+                        let i = app.restore_list_state.selected().unwrap_or(0);
+                        let next = (i + PAGE_SIZE).min(app.restore_files.len() - 1);
+                        app.restore_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::PageUp => {
+                    if !app.restore_files.is_empty() {
+                        let i = app.restore_list_state.selected().unwrap_or(0);
+                        let prev = i.saturating_sub(PAGE_SIZE);
+                        app.restore_list_state.select(Some(prev));
+                    }
+                }
+                KeyCode::Home => {
+                    if !app.restore_files.is_empty() {
+                        app.restore_list_state.select(Some(0));
+                    }
+                }
+                KeyCode::End => {
+                    if !app.restore_files.is_empty() {
+                        app.restore_list_state.select(Some(app.restore_files.len() - 1));
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('R') => {
+                    // Restore selected file(s)
+                    app.perform_restore();
+                }
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
+                    // Go back to commits
+                    app.back_to_commits();
+                }
+                KeyCode::Char(' ') => {
+                    // Toggle selection
+                    app.toggle_restore_select();
+                    // Move to next
+                    if !app.restore_files.is_empty() {
+                        let i = app.restore_list_state.selected().unwrap_or(0);
+                        let next = (i + 1).min(app.restore_files.len() - 1);
+                        app.restore_list_state.select(Some(next));
+                    }
+                }
+                KeyCode::Char('r') => {
+                    // Refresh files
+                    if let Some(idx) = app.selected_commit {
+                        let hash = app.commits[idx].hash.clone();
+                        app.load_commit_files(&hash);
+                    }
+                    app.message = Some(("Refreshed".to_string(), false));
+                }
+                KeyCode::Char('v') => {
+                    app.open_viewer();
+                }
+                _ => {}
+            }
         }
-        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(']') => {
-            // Next project
-            app.next_restore_project();
-        }
-        KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('[') => {
-            // Previous project
-            app.prev_restore_project();
-        }
-        KeyCode::Char('r') => {
-            // Refresh
-            app.refresh_restore_files();
-            app.message = Some(("Refreshed".to_string(), false));
-        }
-        _ => {}
     }
 }
 
@@ -292,16 +736,22 @@ fn ui(f: &mut Frame, app: &mut App) {
         .enumerate()
         .map(|(i, t)| {
             let style = if i == app.mode.index() {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::White)
             };
             Line::from(Span::styled(format!(" {} ", t), style))
         })
         .collect();
 
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" dotmatrix "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Dot Matrix v{} ", env!("CARGO_PKG_VERSION"))),
+        )
         .highlight_style(Style::default().fg(Color::Yellow))
         .select(app.mode.index());
 
@@ -317,54 +767,130 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Status bar
     render_status_bar(f, app, chunks[2]);
 
+    // File viewer overlay
+    if app.viewer_visible {
+        render_viewer(f, app);
+    }
+
     // Help overlay
     if app.show_help {
         render_help(f, app);
     }
+
+    // About overlay
+    if app.show_about {
+        render_about(f);
+    }
+
+    // Project creation overlay
+    if app.creating_project {
+        render_project_input(f, app);
+    }
+
+    // Git remote configuration overlay
+    if app.setting_remote {
+        render_remote_input(f, app);
+    }
+
+    // Custom commit message overlay
+    if app.entering_commit_msg {
+        render_commit_msg_input(f, app);
+    }
+
+    // Recursive preview overlay
+    if app.recursive_preview.is_some() {
+        render_recursive_preview(f, app);
+    }
+
+    // Password prompt overlay
+    if app.password_prompt_visible {
+        render_password_prompt(f, app);
+    }
 }
 
 fn render_projects(f: &mut Frame, app: &mut App, area: Rect) {
-    if app.projects.is_empty() {
-        let msg = Paragraph::new("No projects. Create one with: dotmatrix new <name>")
+    use app::ProjectViewItem;
+    use dmcore::TrackMode;
+
+    if app.visible_items.is_empty() {
+        let msg = Paragraph::new("No projects. Press 'n' to create one.")
             .style(Style::default().fg(Color::DarkGray))
             .block(Block::default().borders(Borders::ALL).title(" Projects "));
         f.render_widget(msg, area);
         return;
     }
 
-    let mut items: Vec<ListItem> = Vec::new();
+    let items: Vec<ListItem> = app
+        .visible_items
+        .iter()
+        .map(|item| match item {
+            ProjectViewItem::Project {
+                name,
+                file_count,
+                summary,
+                expanded,
+            } => {
+                let expand_char = if *expanded { "▼" } else { "▶" };
+                let status_icon = if summary.is_clean() { "✓" } else { "⚠" };
+                let status_color = if summary.is_clean() {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                };
 
-    for project in app.projects.iter() {
-        let expand_char = if project.expanded { "▼" } else { "▶" };
+                // Git remote status indicator
+                let (git_status_str, git_status_color) =
+                    if let Some(remote_status) = app.get_project_remote_status(name) {
+                        if !remote_status.has_remote {
+                            ("[no remote]".to_string(), Color::DarkGray)
+                        } else if !remote_status.remote_reachable {
+                            ("[offline]".to_string(), Color::Red)
+                        } else if remote_status.ahead > 0 && remote_status.behind > 0 {
+                            (
+                                format!("[↑{} ↓{}]", remote_status.ahead, remote_status.behind),
+                                Color::Yellow,
+                            )
+                        } else if remote_status.ahead > 0 {
+                            (format!("[↑{}]", remote_status.ahead), Color::Cyan)
+                        } else if remote_status.behind > 0 {
+                            (format!("[↓{}]", remote_status.behind), Color::Magenta)
+                        } else {
+                            ("[synced]".to_string(), Color::Green)
+                        }
+                    } else {
+                        (String::new(), Color::DarkGray)
+                    };
 
-        // Project header
-        let status_icon = if project.summary.is_clean() { "✓" } else { "⚠" };
-        let status_color = if project.summary.is_clean() {
-            Color::Green
-        } else {
-            Color::Yellow
-        };
+                let mut spans = vec![
+                    Span::raw(format!("{} ", expand_char)),
+                    Span::styled(status_icon, Style::default().fg(status_color)),
+                    Span::raw(" "),
+                    Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(" ({} files)", file_count),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ];
 
-        let header = Line::from(vec![
-            Span::raw(format!("{} ", expand_char)),
-            Span::styled(status_icon, Style::default().fg(status_color)),
-            Span::raw(" "),
-            Span::styled(
-                &project.name,
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({} files)", project.file_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
+                if !git_status_str.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(
+                        git_status_str,
+                        Style::default().fg(git_status_color),
+                    ));
+                }
 
-        items.push(ListItem::new(header));
-
-        // Expanded files
-        if project.expanded {
-            for file in &project.files {
-                let (icon, color) = match file.status {
+                ListItem::new(Line::from(spans))
+            }
+            ProjectViewItem::File {
+                path,
+                status,
+                size,
+                track_mode,
+                encrypted,
+                ..
+            } => {
+                let (icon, color) = match status {
                     FileStatus::Synced => ("✓", Color::Green),
                     FileStatus::Drifted => ("⚠", Color::Yellow),
                     FileStatus::New => ("+", Color::Cyan),
@@ -372,27 +898,49 @@ fn render_projects(f: &mut Frame, app: &mut App, area: Rect) {
                     FileStatus::Error => ("!", Color::Red),
                 };
 
-                let size_str = file
-                    .size
+                let size_str = size
                     .map(|s| format_size(s))
                     .unwrap_or_else(|| "-".to_string());
 
-                let line = Line::from(vec![
+                // Track mode indicator: [G]=Git, [B]=Backup, [+]=Both
+                let track_str = match track_mode {
+                    TrackMode::Git => "[G]",
+                    TrackMode::Backup => "[B]",
+                    TrackMode::Both => "[+]",
+                };
+                let track_color = match track_mode {
+                    TrackMode::Git => Color::Cyan,
+                    TrackMode::Backup => Color::Magenta,
+                    TrackMode::Both => Color::Green,
+                };
+
+                // Encryption indicator
+                let enc_str = if *encrypted { "[E]" } else { "   " };
+
+                ListItem::new(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(icon, Style::default().fg(color)),
+                    Span::raw(" "),
+                    Span::styled(track_str, Style::default().fg(track_color)),
+                    Span::styled(
+                        enc_str,
+                        Style::default().fg(if *encrypted {
+                            Color::Yellow
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
                     Span::raw(" "),
                     Span::styled(
                         format!("{:>8}", size_str),
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::raw("  "),
-                    Span::raw(&file.path),
-                ]);
-
-                items.push(ListItem::new(line));
+                    Span::raw(path),
+                ]))
             }
-        }
-    }
+        })
+        .collect();
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(" Projects "))
@@ -404,40 +952,50 @@ fn render_projects(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_add(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    // Current directory
-    let dir_line = Paragraph::new(format!(" {} ", app.browse_dir.display()))
-        .style(Style::default().fg(Color::Cyan));
-    f.render_widget(dir_line, chunks[0]);
+    // Track mode badge and color (same as Projects view)
+    let (mode_badge, mode_color) = match app.default_track_mode {
+        dmcore::TrackMode::Git => ("[G]", Color::Cyan),
+        dmcore::TrackMode::Backup => ("[B]", Color::Magenta),
+        dmcore::TrackMode::Both => ("[+]", Color::Green),
+    };
 
     // File list
     let items: Vec<ListItem> = app
         .browse_files
         .iter()
         .map(|file| {
-            let icon = if file.is_dir { "📁" } else { "📄" };
-            let tracked = if file.is_tracked { " ✓" } else { "" };
+            let icon = if file.is_dir { "/" } else { " " };
             let size_str = file
                 .size
                 .map(|s| format!(" {:>8}", format_size(s)))
                 .unwrap_or_default();
 
-            let style = if file.is_tracked {
-                Style::default().fg(Color::DarkGray)
+            if file.is_tracked {
+                // Already tracked - show in distinct color (not grey)
+                ListItem::new(Line::from(vec![
+                    Span::styled(icon, Style::default().fg(Color::Blue)),
+                    Span::styled(&file.name, Style::default().fg(Color::DarkGray)),
+                    Span::styled(size_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(" ✓", Style::default().fg(Color::Green)),
+                ]))
             } else if file.is_dir {
-                Style::default().fg(Color::Blue)
+                // Directory
+                ListItem::new(Line::from(vec![
+                    Span::styled(icon, Style::default().fg(Color::Blue)),
+                    Span::styled(&file.name, Style::default().fg(Color::Blue)),
+                    Span::styled(size_str, Style::default().fg(Color::DarkGray)),
+                ]))
             } else {
-                Style::default()
-            };
-
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{} ", icon)),
-                Span::styled(&file.name, style),
-                Span::styled(size_str, Style::default().fg(Color::DarkGray)),
-                Span::styled(tracked, Style::default().fg(Color::Green)),
-            ]))
+                // Regular file - show track mode badge
+                ListItem::new(Line::from(vec![
+                    Span::styled(mode_badge, Style::default().fg(mode_color)),
+                    Span::styled(&file.name, Style::default().fg(Color::White)),
+                    Span::styled(size_str, Style::default().fg(Color::DarkGray)),
+                ]))
+            }
         })
         .collect();
 
@@ -456,79 +1014,67 @@ fn render_add(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_style(Style::default().bg(Color::DarkGray));
 
-    f.render_stateful_widget(list, chunks[1], &mut app.browse_list_state);
+    f.render_stateful_widget(list, chunks[0], &mut app.browse_list_state);
+
+    // Current directory path at bottom
+    let path_display = if let Some(home) = dirs::home_dir() {
+        if let Ok(rel) = app.browse_dir.strip_prefix(&home) {
+            format!(" ~/{}", rel.display())
+        } else {
+            format!(" {}", app.browse_dir.display())
+        }
+    } else {
+        format!(" {}", app.browse_dir.display())
+    };
+    let dir_line = Paragraph::new(path_display).style(Style::default().fg(Color::Cyan));
+    f.render_widget(dir_line, chunks[1]);
 }
 
 fn render_restore(f: &mut Frame, app: &mut App, area: Rect) {
-    if app.projects.is_empty() {
-        let msg = Paragraph::new("No projects. Create one with: dotmatrix new <name>")
+    match app.restore_view {
+        RestoreView::Projects => render_restore_projects(f, app, area),
+        RestoreView::Commits => render_restore_commits(f, app, area),
+        RestoreView::Files => render_restore_files(f, app, area),
+    }
+}
+
+fn render_restore_projects(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.backup_projects.is_empty() {
+        let msg = Paragraph::new("No backups found.\n\nCreate backups in the Projects tab with 'b'.")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title(" Restore "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Available Backups "),
+            );
         f.render_widget(msg, area);
         return;
     }
 
-    // Ensure restore files are loaded when switching to this tab
-    if app.restore_files.is_empty() && !app.projects.is_empty() {
-        app.refresh_restore_files();
-    }
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
-
-    // Project selector line
-    let project_name = app.restore_project_name().unwrap_or("(none)");
-    let project_line = Paragraph::new(format!(" ◀ {} ▶  (←/→ to switch)", project_name))
-        .style(Style::default().fg(Color::Cyan));
-    f.render_widget(project_line, chunks[0]);
-
-    // File list
-    if app.restore_files.is_empty() {
-        let msg = Paragraph::new("No backed up files in this project.\nBackup first with 'b' in Projects tab.")
-            .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL).title(" Restore Files "));
-        f.render_widget(msg, chunks[1]);
-        return;
-    }
-
     let items: Vec<ListItem> = app
-        .restore_files
+        .backup_projects
         .iter()
-        .map(|file| {
-            let (icon, color) = if !file.current_exists {
-                ("✗", Color::Red)      // Missing - can restore
-            } else if file.is_different {
-                ("⚠", Color::Yellow)   // Different - can restore
-            } else {
-                ("✓", Color::Green)    // Same - already current
-            };
+        .map(|project| {
+            let commits_str = format!("{} backups", project.commit_count);
+            let last_backup_str = project
+                .last_backup
+                .as_ref()
+                .map(|d| format!("  Last: {}", d))
+                .unwrap_or_default();
 
-            let status = if !file.current_exists {
-                "missing"
-            } else if file.is_different {
-                "changed"
-            } else {
-                "current"
-            };
-
-            let size_str = format_size(file.backed_up_size);
-
-            ListItem::new(Line::from(vec![
-                Span::styled(icon, Style::default().fg(color)),
-                Span::raw(" "),
+            let line = Line::from(vec![
                 Span::styled(
-                    format!("{:>8}", size_str),
-                    Style::default().fg(Color::DarkGray),
+                    format!("{:<20}", project.name),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw("  "),
-                Span::raw(&file.path),
                 Span::styled(
-                    format!("  [{}]", status),
-                    Style::default().fg(Color::DarkGray),
+                    format!("{:>12}", commits_str),
+                    Style::default().fg(Color::Yellow),
                 ),
-            ]))
+                Span::styled(last_backup_str, Style::default().fg(Color::DarkGray)),
+            ]);
+
+            ListItem::new(line)
         })
         .collect();
 
@@ -536,11 +1082,164 @@ fn render_restore(f: &mut Frame, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Restore Files (Enter to restore) "),
+                .title(" Available Backups (Enter to select) "),
         )
-        .highlight_style(Style::default().bg(Color::DarkGray));
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
 
-    f.render_stateful_widget(list, chunks[1], &mut app.restore_list_state);
+    f.render_stateful_widget(list, area, &mut app.backup_project_list_state);
+}
+
+fn render_restore_commits(f: &mut Frame, app: &mut App, area: Rect) {
+    // Get the selected backup project name for the title
+    let project_name = app.selected_backup_project.clone().unwrap_or_default();
+
+    if app.commits.is_empty() {
+        let title = if project_name.is_empty() {
+            " Backup History ".to_string()
+        } else {
+            format!(" {} - Backup History ", project_name)
+        };
+        let msg = Paragraph::new("No commits found in this backup.")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title),
+            );
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .commits
+        .iter()
+        .map(|commit| {
+            // Parse date to show only date and time
+            let date_short = if commit.date.len() > 19 {
+                &commit.date[..19]
+            } else {
+                &commit.date
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", commit.short_hash),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(format!("{} ", date_short), Style::default().fg(Color::Cyan)),
+                Span::raw(&commit.message),
+            ]);
+
+            ListItem::new(line)
+        })
+        .collect();
+
+    let title = format!(
+        " {} - {} backups (Enter=select, Backspace=back) ",
+        project_name,
+        app.commits.len()
+    );
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, area, &mut app.commit_list_state);
+}
+
+fn render_restore_files(f: &mut Frame, app: &mut App, area: Rect) {
+    // Get the selected backup project name for the title
+    let project_name = app.selected_backup_project.clone().unwrap_or_default();
+
+    if app.restore_files.is_empty() {
+        let title = if project_name.is_empty() {
+            " Files ".to_string()
+        } else {
+            format!(" {} - Files ", project_name)
+        };
+        let msg = Paragraph::new("No files found in this backup.")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(title));
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .restore_files
+        .iter()
+        .enumerate()
+        .map(|(i, file)| {
+            let selected_marker = if app.restore_selected.contains(&i) {
+                "*"
+            } else {
+                " "
+            };
+
+            // Status indicator
+            let (status, color) = if !file.exists_locally {
+                ("NEW", Color::Cyan) // File doesn't exist locally
+            } else if file.local_differs {
+                ("CHG", Color::Yellow) // Local file is different
+            } else {
+                ("OK ", Color::Green) // File matches backup
+            };
+
+            let size_str = format_size(file.size);
+
+            let line = Line::from(vec![
+                Span::raw(format!("{} ", selected_marker)),
+                Span::styled(format!("{} ", status), Style::default().fg(color)),
+                Span::raw(format!("{}  ", size_str)),
+                Span::styled(
+                    file.display_path.clone(),
+                    Style::default().fg(if file.local_differs {
+                        Color::White
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+            ]);
+
+            ListItem::new(line)
+        })
+        .collect();
+
+    let commit_info = app
+        .selected_commit
+        .and_then(|i| app.commits.get(i))
+        .map(|c| format!("{} - {}", c.short_hash, c.message))
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let title = if project_name.is_empty() {
+        format!(" {} (Enter=restore, Backspace=back) ", commit_info)
+    } else {
+        format!(" {} / {} (Enter=restore, Backspace=back) ", project_name, commit_info)
+    };
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    f.render_stateful_widget(list, area, &mut app.restore_list_state);
 }
 
 fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
@@ -554,11 +1253,17 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
         (message.clone(), Style::default().fg(color))
     } else {
         let help = match app.mode {
-            Mode::Projects => "↑↓:select  Enter:expand  b:backup  s:sync  ?:help  q:quit",
+            Mode::Projects => "↑↓:nav  Enter:expand  b:backup  S:save  g:git  p:push  P:pull  ?:help",
             Mode::Add => "↑↓:select  Enter:open/add  h:parent  ~:home  ?:help  q:quit",
-            Mode::Restore => "↑↓:select  ←→:project  Enter:restore  r:refresh  ?:help  q:quit",
+            Mode::Restore => match app.restore_view {
+                RestoreView::Projects => "↑↓:select  Enter:view backups  r:refresh  ?:help  q:quit",
+                RestoreView::Commits => "↑↓:select  Enter:view files  h:back  r:refresh  ?:help",
+                RestoreView::Files => {
+                    "↑↓:select  Space:multi  Enter:restore  v:view  h:back  ?:help"
+                }
+            },
         };
-        (help.to_string(), Style::default().fg(Color::DarkGray))
+        (help.to_string(), Style::default().fg(Color::Cyan))
     };
 
     let status = Paragraph::new(msg)
@@ -568,40 +1273,149 @@ fn render_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(status, area);
 }
 
+fn render_viewer(f: &mut Frame, app: &App) {
+    use ratatui::widgets::{Clear, Wrap};
+
+    let area = centered_rect(85, 85, f.area());
+
+    // Clear the area completely (removes any content behind)
+    f.render_widget(Clear, area);
+
+    // Get visible lines based on scroll
+    let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+    let start = app.viewer_scroll;
+    let end = (start + visible_height).min(app.viewer_content.len());
+    let visible_lines = &app.viewer_content[start..end];
+
+    // Build paragraph from ViewerLine spans
+    let lines: Vec<Line> = visible_lines
+        .iter()
+        .map(|vl| {
+            let spans: Vec<Span> = vl
+                .spans
+                .iter()
+                .map(|(text, style)| Span::styled(text.clone(), *style))
+                .collect();
+            Line::from(spans)
+        })
+        .collect();
+
+    // Build title with scroll info
+    let scroll_info = format!(
+        " {} [{}/{}] ",
+        app.viewer_title,
+        app.viewer_scroll + 1,
+        app.viewer_content.len()
+    );
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(scroll_info)
+                .border_style(Style::default().fg(Color::Cyan))
+                .style(Style::default().bg(Color::Black)),
+        )
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(Color::Black));
+
+    f.render_widget(paragraph, area);
+}
+
 fn render_help(f: &mut Frame, _app: &App) {
     let area = centered_rect(60, 70, f.area());
 
     let help_text = r#"
+ NAVIGATION (All Tabs)
+ ───────────────────────────
+ ↑/k ↓/j    Move up/down
+ PgUp/PgDn  Page up/down
+ Home/End   Jump to start/end
+
  GLOBAL KEYS
  ───────────────────────────
  Tab/1-3    Switch tabs
  ?          Show/hide help
+ A          About
+ v          View file content
  q          Quit
+
+ FILE VIEWER
+ ───────────────────────────
+ ↑/k ↓/j    Scroll up/down
+ PgUp/PgDn  Page up/down
+ g/Home     Go to top
+ G/End      Go to bottom
+ v/q/Esc    Close viewer
 
  PROJECTS TAB
  ───────────────────────────
- ↑/k ↓/j    Navigate projects
- Enter/→    Expand/collapse
- ←/h        Collapse
+ Enter/→/l  Expand/collapse
+ ←/h        Collapse project
+ m          Toggle track mode
+ x          Toggle encryption
+ X          Encrypt project
  b          Backup project
+ B          Backup w/ message
  s          Sync project
+ S          Save now (live)
+ n          New project
+ d/Del      Delete project
  r          Refresh
+ g          Refresh git status
+ G          Set git remote
+ p          Push to remote
+ P          Pull from remote
 
  ADD FILES TAB
  ───────────────────────────
- ↑/k ↓/j    Navigate files
- Enter/→    Open dir / Add file
- ←/h        Parent directory
+ Enter/→/l  Open dir / Add file
+ ←/h/Bksp   Parent directory
  a          Add selected file
+ R          Recursive add
+ p          Cycle target project
+ t          Cycle track mode
+ n          New project
  ~          Go to home
 
- RESTORE TAB
+ RESTORE - PROJECTS
  ───────────────────────────
- ↑/k ↓/j    Navigate files
- ←/h [      Previous project
- →/l ]      Next project
- Enter/R    Restore selected file
- r          Refresh list
+ Enter/→/l  View project backups
+ r          Refresh
+
+ RESTORE - COMMITS
+ ───────────────────────────
+ Enter/→/l  View files in backup
+ ←/h/Bksp   Back to projects
+ r          Refresh
+
+ RESTORE - FILES
+ ───────────────────────────
+ Space      Toggle multi-select
+ Enter/R    Restore file(s)
+ v          View file content
+ ←/h/Bksp   Back to commits
+ r          Refresh
+
+ TRACK MODES
+ ───────────────────────────
+ [G] Git     Version control
+ [B] Backup  Incremental
+ [+] Both    Git + Backup
+ [E] Encrypted file
+
+ GIT STATUS
+ ───────────────────────────
+ [synced]   Up to date
+ [↑N]       Ahead of remote
+ [↓N]       Behind remote
+ [no remote] No remote set
+
+ RESTORE SYMBOLS
+ ───────────────────────────
+ NEW   File missing locally
+ CHG   Local file differs
+ OK    Local matches backup
 "#;
 
     let help = Paragraph::new(help_text)
@@ -615,6 +1429,357 @@ fn render_help(f: &mut Frame, _app: &App) {
 
     f.render_widget(ratatui::widgets::Clear, area);
     f.render_widget(help, area);
+}
+
+fn render_about(f: &mut Frame) {
+    let area = centered_rect(50, 40, f.area());
+
+    let about_text = format!(
+        r#"
+
+         ██████╗  ██████╗ ████████╗
+         ██╔══██╗██╔═══██╗╚══██╔══╝
+         ██║  ██║██║   ██║   ██║
+         ██║  ██║██║   ██║   ██║
+         ██████╔╝╚██████╔╝   ██║
+         ╚═════╝  ╚═════╝    ╚═╝
+
+   ███╗   ███╗ █████╗ ████████╗██████╗ ██╗██╗  ██╗
+   ████╗ ████║██╔══██╗╚══██╔══╝██╔══██╗██║╚██╗██╔╝
+   ██╔████╔██║███████║   ██║   ██████╔╝██║ ╚███╔╝
+   ██║╚██╔╝██║██╔══██║   ██║   ██╔══██╗██║ ██╔██╗
+   ██║ ╚═╝ ██║██║  ██║   ██║   ██║  ██║██║██╔╝ ██╗
+   ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
+
+                    v{}
+
+    Project compositor with git versioning
+
+    Author: Woofson
+    License: MIT
+    GitHub: https://github.com/Woofson/dotmatrix
+
+             Press any key to close
+"#,
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let about = Paragraph::new(about_text)
+        .style(Style::default().fg(Color::Cyan))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" About ")
+                .style(Style::default().bg(Color::Black)),
+        );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(about, area);
+}
+
+fn render_project_input(f: &mut Frame, app: &App) {
+    let area = centered_rect(50, 20, f.area());
+
+    let input_text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter project name:",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  > "),
+            Span::styled(&app.project_input, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Green)),
+            Span::raw(": Create  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let input = Paragraph::new(input_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" New Project ")
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(input, area);
+}
+
+fn render_remote_input(f: &mut Frame, app: &App) {
+    let area = centered_rect(70, 25, f.area());
+
+    let project_name = app.selected_project_name().unwrap_or_default();
+
+    let input_text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Git remote URL for '{}':", project_name),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  > "),
+            Span::styled(&app.remote_input, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Example: git@github.com:user/repo.git",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Green)),
+            Span::raw(": Set  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let input = Paragraph::new(input_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Set Git Remote ")
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(input, area);
+}
+
+fn render_commit_msg_input(f: &mut Frame, app: &App) {
+    let area = centered_rect(70, 30, f.area());
+
+    let project_name = app.selected_project_name().unwrap_or_default();
+
+    let input_text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Commit message for '{}':", project_name),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  > "),
+            Span::styled(&app.commit_msg_input, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Date/time will be added automatically.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  Leave empty for default message.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Green)),
+            Span::raw(": Backup  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let input = Paragraph::new(input_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Backup with Custom Message ")
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(input, area);
+}
+
+fn render_recursive_preview(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(80, 80, f.area());
+
+    // Split into header and list
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    // Build items from preview data (collect what we need first)
+    let (source_display, selected_count, total_count, items) = {
+        let preview = match &app.recursive_preview {
+            Some(p) => p,
+            None => return,
+        };
+
+        let source_display = if let Some(home) = dirs::home_dir() {
+            if let Ok(rel) = preview.source_dir.strip_prefix(&home) {
+                format!("~/{}", rel.display())
+            } else {
+                preview.source_dir.display().to_string()
+            }
+        } else {
+            preview.source_dir.display().to_string()
+        };
+
+        let items: Vec<ListItem> = preview
+            .preview_files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| {
+                let selected = if preview.selected_files.contains(&i) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let size_str = format_size(file.size);
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{} ", selected),
+                        Style::default().fg(if preview.selected_files.contains(&i) {
+                            Color::Green
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                    Span::styled(
+                        format!("{:>8}  ", size_str),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(file.display_path.clone()),
+                ]))
+            })
+            .collect();
+
+        (
+            source_display,
+            preview.selected_files.len(),
+            preview.preview_files.len(),
+            items,
+        )
+    };
+
+    // Header
+    let header_text = vec![
+        Line::from(vec![
+            Span::raw(" Adding from: "),
+            Span::styled(source_display, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::raw(" Selected: "),
+            Span::styled(
+                format!("{}/{}", selected_count, total_count),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw(" files"),
+        ]),
+    ];
+
+    let header = Paragraph::new(header_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Recursive Add "),
+        )
+        .style(Style::default().bg(Color::Black));
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(header, chunks[0]);
+
+    // File list
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL))
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .style(Style::default().bg(Color::Black));
+
+    f.render_stateful_widget(
+        list,
+        chunks[1],
+        &mut app
+            .recursive_preview
+            .as_mut()
+            .unwrap()
+            .preview_list_state,
+    );
+
+    // Footer with hints
+    let footer = Paragraph::new(" Space: toggle  a: all  Enter: add  Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+    f.render_widget(footer, chunks[2]);
+}
+
+fn render_password_prompt(f: &mut Frame, app: &App) {
+    let area = centered_rect(50, 25, f.area());
+
+    let title = match app.password_purpose {
+        PasswordPurpose::Backup => " Encryption Password ",
+        PasswordPurpose::Restore => " Decryption Password ",
+    };
+
+    let description = match app.password_purpose {
+        PasswordPurpose::Backup => "  Enter password to encrypt files:",
+        PasswordPurpose::Restore => "  Enter password to decrypt files:",
+    };
+
+    // Mask the password with asterisks
+    let masked: String = "*".repeat(app.password_input.len());
+
+    let input_text = vec![
+        Line::from(""),
+        Line::from(Span::styled(description, Style::default().fg(Color::White))),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  > "),
+            Span::styled(masked, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Enter", Style::default().fg(Color::Green)),
+            Span::raw(": Confirm  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let input = Paragraph::new(input_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .style(Style::default().bg(Color::Black)),
+    );
+
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(input, area);
 }
 
 /// Create a centered rectangle

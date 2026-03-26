@@ -5,7 +5,59 @@ All notable changes to dotmatrix will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-rc.1] - 2026-03-26
+
+### Major Changes - v2 Architecture
+
+**Per-Project Git Repositories**
+- Each project now has its own isolated git repository
+- Independent version history per project
+- Separate git remotes per project (`G` to configure)
+- No cross-project interference
+- New directory structure:
+  ```
+  ~/.local/share/dotmatrix/projects/
+  ├── project-name/
+  │   ├── .git/           # Project-specific git repo
+  │   ├── store/          # Content-addressed storage
+  │   └── index.json      # File tracking index
+  ```
+
+**Path Migration for Restore**
+- Automatic path remapping when username/home directory changes
+- Supports Linux (`/home/user/`) and macOS (`/Users/user/`) paths
+- Restore backups made on different machines or by different users
+
+**File Viewer with conf.d Assembly**
+- Press `v` to view file contents with syntax highlighting
+- Directory viewing assembles all files with headers
+- Files sorted by numeric prefix (`00-base.conf`, `10-network.conf`)
+- Syntect-based highlighting with base16-ocean.dark theme
+
+### Added
+- `Home/End` keys for jumping to start/end of lists in all tabs
+- Custom commit messages with `B` key (timestamps auto-appended)
+- Git remote configuration per project with `G` key
+- Track mode selection when adding files with `t` key
+- Page up/down navigation in all list views
+
+### Changed
+- Git repositories now always use `main` as default branch
+- Index format changed from `files` to `entries` field (v1 format still readable)
+- Manifest moved to project-based structure
+- TUI help text reorganized with navigation section
+
+### Fixed
+- Restore now correctly lists files from backups
+- Cursor position preserved when adding files
+- Page up/down navigation working in all tabs
+
+### Technical
+- Workspace crate structure: `dmcore`, `dmtui`, `dmcli` (planned), `dmgui` (planned)
+- dmcore contains all logic, frontends are thin wrappers
+- Added syntect dependency for syntax highlighting
+
+---
 
 ## [0.5.1] - 2026-03-17
 

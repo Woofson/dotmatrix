@@ -1,6 +1,6 @@
 [package]
 name = "dmcore"
-version = "2.0.0-alpha.1"
+version = "2.0.0-rc.1"
 edition = "2021"
 authors = ["Woofson <https://github.com/Woofson>"]
 description = "Core library for dotmatrix - project compositor with git versioning"

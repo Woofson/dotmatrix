@@ -6,7 +6,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use age::secrecy::SecretString;
+
 use crate::config::Config;
+use crate::crypto::{decrypt_file, encrypt_file};
 use crate::scanner::hash_file;
 
 /// Result of storing a file
@@ -136,4 +139,220 @@ fn walkdir(dir: PathBuf) -> anyhow::Result<Vec<PathBuf>> {
     }
 
     Ok(files)
+}
+
+/// Store a file with optional encryption
+///
+/// If password is provided, the file is encrypted before storing.
+/// The hash is computed on the original (unencrypted) content.
+pub fn store_file_encrypted(
+    config: &Config,
+    source: &Path,
+    password: Option<&SecretString>,
+) -> anyhow::Result<StoreResult> {
+    let store_dir = config.store_dir()?;
+    fs::create_dir_all(&store_dir)?;
+
+    // Hash the original file (before encryption)
+    let hash = hash_file(source)?;
+    let size = fs::metadata(source)?.len();
+
+    // Determine storage path
+    let storage_path = hash_to_path(&store_dir, &hash);
+
+    // Check if already stored (deduplication)
+    let was_new = if storage_path.exists() {
+        false
+    } else {
+        // Create parent directory
+        if let Some(parent) = storage_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Store with or without encryption
+        match password {
+            Some(pwd) => {
+                encrypt_file(source, &storage_path, pwd)?;
+            }
+            None => {
+                fs::copy(source, &storage_path)?;
+            }
+        }
+        true
+    };
+
+    Ok(StoreResult {
+        source: source.to_path_buf(),
+        hash,
+        size,
+        was_new,
+    })
+}
+
+/// Retrieve a file from the store, optionally decrypting it
+///
+/// If the file was stored encrypted, provide the password to decrypt.
+pub fn retrieve_file_encrypted(
+    config: &Config,
+    hash: &str,
+    dest: &Path,
+    password: Option<&SecretString>,
+    encrypted: bool,
+) -> anyhow::Result<bool> {
+    let store_dir = config.store_dir()?;
+    let storage_path = hash_to_path(&store_dir, hash);
+
+    if !storage_path.exists() {
+        return Ok(false);
+    }
+
+    // Create parent directory for destination
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Retrieve with or without decryption
+    if encrypted {
+        match password {
+            Some(pwd) => {
+                decrypt_file(&storage_path, dest, pwd)?;
+            }
+            None => {
+                anyhow::bail!("Password required to retrieve encrypted file");
+            }
+        }
+    } else {
+        fs::copy(&storage_path, dest)?;
+    }
+
+    Ok(true)
+}
+
+/// Store a file in a specific store directory
+pub fn store_file_to(store_dir: &Path, source: &Path) -> anyhow::Result<StoreResult> {
+    fs::create_dir_all(store_dir)?;
+
+    // Hash the file
+    let hash = hash_file(source)?;
+    let size = fs::metadata(source)?.len();
+
+    // Determine storage path
+    let storage_path = hash_to_path(store_dir, &hash);
+
+    // Check if already stored (deduplication)
+    let was_new = if storage_path.exists() {
+        false
+    } else {
+        // Create parent directory
+        if let Some(parent) = storage_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Copy file to store
+        fs::copy(source, &storage_path)?;
+        true
+    };
+
+    Ok(StoreResult {
+        source: source.to_path_buf(),
+        hash,
+        size,
+        was_new,
+    })
+}
+
+/// Store a file with optional encryption to a specific store directory
+pub fn store_file_to_encrypted(
+    store_dir: &Path,
+    source: &Path,
+    password: Option<&SecretString>,
+) -> anyhow::Result<StoreResult> {
+    fs::create_dir_all(store_dir)?;
+
+    // Hash the original file (before encryption)
+    let hash = hash_file(source)?;
+    let size = fs::metadata(source)?.len();
+
+    // Determine storage path
+    let storage_path = hash_to_path(store_dir, &hash);
+
+    // Check if already stored (deduplication)
+    let was_new = if storage_path.exists() {
+        false
+    } else {
+        // Create parent directory
+        if let Some(parent) = storage_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Store with or without encryption
+        match password {
+            Some(pwd) => {
+                encrypt_file(source, &storage_path, pwd)?;
+            }
+            None => {
+                fs::copy(source, &storage_path)?;
+            }
+        }
+        true
+    };
+
+    Ok(StoreResult {
+        source: source.to_path_buf(),
+        hash,
+        size,
+        was_new,
+    })
+}
+
+/// Retrieve a file from a specific store directory
+pub fn retrieve_file_from(store_dir: &Path, hash: &str, dest: &Path) -> anyhow::Result<bool> {
+    let storage_path = hash_to_path(store_dir, hash);
+
+    if !storage_path.exists() {
+        return Ok(false);
+    }
+
+    // Create parent directory for destination
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::copy(&storage_path, dest)?;
+    Ok(true)
+}
+
+/// Retrieve a file from a specific store directory, optionally decrypting it
+pub fn retrieve_file_from_encrypted(
+    store_dir: &Path,
+    hash: &str,
+    dest: &Path,
+    password: Option<&SecretString>,
+    encrypted: bool,
+) -> anyhow::Result<bool> {
+    let storage_path = hash_to_path(store_dir, hash);
+
+    if !storage_path.exists() {
+        return Ok(false);
+    }
+
+    // Create parent directory for destination
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Retrieve with or without decryption
+    if encrypted {
+        match password {
+            Some(pwd) => {
+                decrypt_file(&storage_path, dest, pwd)?;
+            }
+            None => {
+                anyhow::bail!("Password required to retrieve encrypted file");
+            }
+        }
+    } else {
+        fs::copy(&storage_path, dest)?;
+    }
+
+    Ok(true)
 }

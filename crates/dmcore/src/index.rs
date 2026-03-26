@@ -5,7 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
+
+use crate::config::Config;
 
 /// Index of all tracked files and their backup state
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -34,6 +37,10 @@ pub struct FileEntry {
     /// Last backup timestamp
     #[serde(default)]
     pub last_backup: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Whether the file is stored encrypted
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 impl Index {
@@ -110,6 +117,28 @@ impl Index {
     pub fn iter(&self) -> impl Iterator<Item = (&PathBuf, &FileEntry)> {
         self.entries.iter()
     }
+
+    /// Load index for a specific project
+    pub fn load_for_project(config: &Config, project_name: &str) -> anyhow::Result<Self> {
+        let path = config.project_index_path(project_name)?;
+        if path.exists() {
+            let content = fs::read_to_string(&path)?;
+            Ok(serde_json::from_str(&content)?)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    /// Save index for a specific project
+    pub fn save_for_project(&self, config: &Config, project_name: &str) -> anyhow::Result<()> {
+        let path = config.project_index_path(project_name)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write(&path, content)?;
+        Ok(())
+    }
 }
 
 impl FileEntry {
@@ -121,6 +150,7 @@ impl FileEntry {
             modified,
             last_sync: None,
             last_backup: None,
+            encrypted: false,
         }
     }
 
@@ -132,6 +162,19 @@ impl FileEntry {
             modified,
             last_sync: Some(chrono::Utc::now()),
             last_backup: None,
+            encrypted: false,
+        }
+    }
+
+    /// Create an encrypted file entry with current sync time
+    pub fn with_sync_now_encrypted(hash: String, size: u64, modified: u64) -> Self {
+        Self {
+            hash,
+            size,
+            modified,
+            last_sync: Some(chrono::Utc::now()),
+            last_backup: None,
+            encrypted: true,
         }
     }
 

@@ -164,6 +164,22 @@ impl Config {
     pub fn backups_dir(&self) -> anyhow::Result<PathBuf> {
         Ok(self.data_dir()?.join("backups"))
     }
+
+    /// Get the directory for a specific project
+    pub fn project_dir(&self, project_name: &str) -> anyhow::Result<PathBuf> {
+        let data_dir = self.data_dir()?;
+        Ok(data_dir.join("projects").join(project_name))
+    }
+
+    /// Get the store directory for a specific project
+    pub fn project_store_dir(&self, project_name: &str) -> anyhow::Result<PathBuf> {
+        Ok(self.project_dir(project_name)?.join("store"))
+    }
+
+    /// Get the index path for a specific project
+    pub fn project_index_path(&self, project_name: &str) -> anyhow::Result<PathBuf> {
+        Ok(self.project_dir(project_name)?.join("index.json"))
+    }
 }
 
 /// Expand ~ to home directory
