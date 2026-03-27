@@ -1,4 +1,4 @@
-# Makefile for dotmatrix
+# Makefile for Dot Matrix
 
 .PHONY: all build release clean install uninstall install-man run help test windows_release linux_release
 
@@ -7,71 +7,84 @@ all: release
 
 # Build in debug mode
 build:
-	@echo "🔨 Building dotmatrix (debug mode)..."
+	@echo "Building Dot Matrix (debug mode)..."
 	@cargo build
-	@echo "✓ Debug build complete: ./target/debug/dotmatrix"
+	@echo "Debug build complete: ./target/debug/dmxcli, dmxtui, dmxgui"
 
 # Build in release mode (optimized)
 release:
-	@echo "🔨 Building dotmatrix (release mode)..."
+	@echo "Building Dot Matrix (release mode)..."
 	@cargo build --release
-	@echo "✓ Release build complete:"
-	@echo "    ./target/release/dotmatrix  (CLI/TUI/GUI)"
-	@echo "    ./target/release/dmgui      (GUI-only, no console on Windows)"
+	@echo "Release build complete:"
+	@echo "    ./target/release/dmxcli  (CLI)"
+	@echo "    ./target/release/dmxtui  (TUI)"
+	@echo "    ./target/release/dmxgui  (GUI)"
 
 # Clean build artifacts
 clean:
-	@echo "🧹 Cleaning build artifacts..."
+	@echo "Cleaning build artifacts..."
 	@cargo clean
-	@echo "✓ Clean complete!"
+	@echo "Clean complete!"
 
 # Install to system
 install: release
-	@echo "📦 Installing dotmatrix..."
-	@cargo install --path .
-	@echo "✓ Installed! You can now run 'dotmatrix' from anywhere"
-	@echo "💡 Run 'sudo make install-man' to install the man page"
+	@echo "Installing Dot Matrix..."
+	@cargo install --path crates/dmcli
+	@cargo install --path crates/dmtui
+	@cargo install --path crates/dmgui
+	@echo "Installed! You can now run 'dmxcli', 'dmxtui', or 'dmxgui'"
+	@echo "Run 'sudo make install-man' to install the man page"
 
 # Install man page (requires sudo)
 install-man:
-	@echo "📖 Installing man page..."
+	@echo "Installing man page..."
 	@install -d /usr/local/share/man/man1
-	@install -m 644 dotmatrix.1 /usr/local/share/man/man1/
-	@echo "✓ Man page installed! Try 'man dotmatrix'"
+	@install -m 644 dmxcli.1 /usr/local/share/man/man1/
+	@echo "Man page installed! Try 'man dmxcli'"
 
 # Uninstall from system
 uninstall:
-	@echo "🗑️  Uninstalling dotmatrix..."
-	@cargo uninstall dotmatrix
-	@echo "✓ Uninstalled!"
+	@echo "Uninstalling Dot Matrix..."
+	-@cargo uninstall dmcli 2>/dev/null || true
+	-@cargo uninstall dmtui 2>/dev/null || true
+	-@cargo uninstall dmgui 2>/dev/null || true
+	@echo "Uninstalled!"
 
-# Run in development mode
+# Run CLI in development mode
 run:
-	@cargo run -- $(ARGS)
+	@cargo run -p dmcli -- $(ARGS)
+
+# Run TUI in development mode
+run-tui:
+	@cargo run -p dmtui
+
+# Run GUI in development mode
+run-gui:
+	@cargo run -p dmgui
 
 # Run tests
 test:
-	@echo "🧪 Running tests..."
+	@echo "Running tests..."
 	@cargo test
 
 # Check code without building
 check:
-	@echo "🔍 Checking code..."
+	@echo "Checking code..."
 	@cargo check
 
 # Format code
 fmt:
-	@echo "✨ Formatting code..."
+	@echo "Formatting code..."
 	@cargo fmt
 
 # Run clippy linter
 lint:
-	@echo "🔎 Running clippy..."
+	@echo "Running clippy..."
 	@cargo clippy -- -D warnings
 
 # Build Windows release: exe, zip, and Inno Setup installer
 windows_release: release
-	@echo "🪟 Building Windows release..."
+	@echo "Building Windows release..."
 	@$(eval VERSION := $(shell cargo metadata --no-deps --format-version 1 | python -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])"))
 	@echo "   Version: $(VERSION)"
 
@@ -80,28 +93,29 @@ windows_release: release
 
 	@echo "   Building zip archive..."
 	@mkdir -p release/dotmatrix-$(VERSION)-windows-x86_64
-	@cp target/release/dotmatrix.exe release/dotmatrix-$(VERSION)-windows-x86_64/
-	@cp target/release/dmgui.exe release/dotmatrix-$(VERSION)-windows-x86_64/
+	@cp target/release/dmxcli.exe release/dotmatrix-$(VERSION)-windows-x86_64/
+	@cp target/release/dmxtui.exe release/dotmatrix-$(VERSION)-windows-x86_64/
+	@cp target/release/dmxgui.exe release/dotmatrix-$(VERSION)-windows-x86_64/
 	@cp README.md CHANGELOG.md LICENSE release/dotmatrix-$(VERSION)-windows-x86_64/
-	@cp example-config.toml release/dotmatrix-$(VERSION)-windows-x86_64/
+	@cp example-config.toml example-manifest.toml release/dotmatrix-$(VERSION)-windows-x86_64/
 	@cd release && zip -r dotmatrix-$(VERSION)-windows-x86_64.zip dotmatrix-$(VERSION)-windows-x86_64/
 	@rm -rf release/dotmatrix-$(VERSION)-windows-x86_64
-	@echo "   ✓ Zip: release/dotmatrix-$(VERSION)-windows-x86_64.zip"
+	@echo "   Zip: release/dotmatrix-$(VERSION)-windows-x86_64.zip"
 
 	@echo "   Compiling installer..."
 	@iscc dotmatrix-installer.iss
-	@echo "   ✓ Installer: release/dotmatrix-$(VERSION)-setup-windows-x86_64.exe"
+	@echo "   Installer: release/dotmatrix-$(VERSION)-setup-windows-x86_64.exe"
 
-	@echo "✓ Windows release complete!"
+	@echo "Windows release complete!"
 	@echo ""
 	@echo "  release/dotmatrix-$(VERSION)-windows-x86_64.zip"
 	@echo "  release/dotmatrix-$(VERSION)-setup-windows-x86_64.exe"
 	@echo ""
-	@echo "  Includes: dotmatrix.exe (CLI/TUI/GUI) + dmgui.exe (GUI-only)"
+	@echo "  Includes: dmxcli.exe (CLI) + dmxtui.exe (TUI) + dmxgui.exe (GUI)"
 
 # Build Linux release tarball
 linux_release: release
-	@echo "🐧 Building Linux release..."
+	@echo "Building Linux release..."
 	@$(eval VERSION := $(shell cargo metadata --no-deps --format-version 1 | python -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])"))
 	@echo "   Version: $(VERSION)"
 
@@ -110,32 +124,36 @@ linux_release: release
 
 	@echo "   Building tarball..."
 	@mkdir -p release/dotmatrix-$(VERSION)-linux-x86_64
-	@cp target/release/dotmatrix release/dotmatrix-$(VERSION)-linux-x86_64/
-	@cp target/release/dmgui release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp target/release/dmxcli release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp target/release/dmxtui release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp target/release/dmxgui release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cp README.md CHANGELOG.md LICENSE release/dotmatrix-$(VERSION)-linux-x86_64/
-	@cp example-config.toml release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp example-config.toml example-manifest.toml release/dotmatrix-$(VERSION)-linux-x86_64/
+	@cp dmxcli.1 release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cp dotmatrix.desktop release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cp assets/dotmatrix-icon.svg assets/dotmatrix-icon-256.png release/dotmatrix-$(VERSION)-linux-x86_64/
 	@cd release && tar -czvf dotmatrix-$(VERSION)-linux-x86_64.tar.gz dotmatrix-$(VERSION)-linux-x86_64/
-	@echo "   ✓ Tarball: release/dotmatrix-$(VERSION)-linux-x86_64.tar.gz"
+	@echo "   Tarball: release/dotmatrix-$(VERSION)-linux-x86_64.tar.gz"
 
-	@echo "✓ Linux release complete!"
+	@echo "Linux release complete!"
 	@echo ""
 	@echo "  release/dotmatrix-$(VERSION)-linux-x86_64.tar.gz"
 	@echo ""
-	@echo "  Includes: dotmatrix + dmgui + dotmatrix.desktop + icon"
+	@echo "  Includes: dmxcli + dmxtui + dmxgui + man page + desktop file + icon"
 
 # Show help
 help:
-	@echo "dotmatrix - Makefile targets:"
+	@echo "Dot Matrix - Makefile targets:"
 	@echo ""
 	@echo "  make build           - Build in debug mode"
-	@echo "  make release         - Build in release mode (dotmatrix + dmgui)"
+	@echo "  make release         - Build in release mode"
 	@echo "  make clean           - Remove build artifacts"
-	@echo "  make install         - Install binary to ~/.cargo/bin/"
+	@echo "  make install         - Install binaries to ~/.cargo/bin/"
 	@echo "  make install-man     - Install man page (requires sudo)"
 	@echo "  make uninstall       - Remove from system"
-	@echo "  make run ARGS=''     - Run with arguments"
+	@echo "  make run ARGS=''     - Run CLI with arguments"
+	@echo "  make run-tui         - Run TUI"
+	@echo "  make run-gui         - Run GUI"
 	@echo "  make test            - Run tests"
 	@echo "  make check           - Check code without building"
 	@echo "  make fmt             - Format code with rustfmt"
@@ -145,8 +163,9 @@ help:
 	@echo "  make help            - Show this help message"
 	@echo ""
 	@echo "Binaries:"
-	@echo "  dotmatrix  - Full CLI/TUI/GUI (with console on Windows)"
-	@echo "  dmgui      - GUI-only (no console window on Windows)"
+	@echo "  dmxcli  - Command-line interface"
+	@echo "  dmxtui  - Terminal user interface (ratatui)"
+	@echo "  dmxgui  - Graphical user interface (egui)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                   # Build release version"

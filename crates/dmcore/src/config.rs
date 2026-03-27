@@ -5,6 +5,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Preferred interface when running without arguments
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PreferredInterface {
+    /// Platform default (GUI on Windows, TUI on Linux/macOS)
+    #[default]
+    Auto,
+    /// Always use GUI
+    Gui,
+    /// Always use TUI
+    Tui,
+}
+
 /// Global dotmatrix configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -27,6 +40,10 @@ pub struct Config {
     /// Global exclude patterns
     #[serde(default = "default_excludes")]
     pub exclude: Vec<String>,
+
+    /// Preferred interface when running without arguments
+    #[serde(default)]
+    pub preferred_interface: PreferredInterface,
 }
 
 fn default_true() -> bool {
@@ -51,6 +68,7 @@ impl Default for Config {
             default_archive_format: ArchiveFormat::default(),
             git_enabled: true,
             exclude: default_excludes(),
+            preferred_interface: PreferredInterface::default(),
         }
     }
 }

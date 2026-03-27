@@ -1,37 +1,45 @@
-# Dot Matrix - Example Configuration File
+# Dot Matrix 2.0 - Example Configuration File
 # Copy this file to your config directory:
 #   Linux/macOS: ~/.config/dotmatrix/config.toml
 #   Windows: %APPDATA%\dotmatrix\config.toml
 #
-# Or run 'dotmatrix init' to generate a default config.
+# Or run 'dmxcli init' to generate a default config.
+#
+# Note: Projects and tracked files are defined in manifest.toml,
+# not in this config file. See example-manifest.toml for project setup.
+
+# ═══════════════════════════════════════════════════════════════
+# DATA DIRECTORY
+# ═══════════════════════════════════════════════════════════════
 
 # Custom data directory (optional)
 # If not set, uses system default:
 #   Linux: ~/.local/share/dotmatrix
-#   Windows: C:\Users\<User>\Documents\dotmatrix
+#   Windows: %LOCALAPPDATA%\dotmatrix
 #   macOS: ~/Library/Application Support/dotmatrix
-# data_dir = "~/my-dotfiles-backup"
+# data_dir = "~/my-dotmatrix-data"
 
-# Enable git versioning for backups (recommended)
-git_enabled = true
+# ═══════════════════════════════════════════════════════════════
+# BACKUP SETTINGS
+# ═══════════════════════════════════════════════════════════════
 
-# Git remote URL for push/pull sync (optional)
-# Set this to sync backups to a remote repository
-# TUI: Press 'p' to pull, 'P' to push, 'U' to set URL
-# GUI: Use Pull/Push buttons in status bar
-# git_remote_url = "https://github.com/username/dotfiles-backup.git"
-# git_remote_url = "git@github.com:username/dotfiles-backup.git"
-
-# Backup mode: "incremental" or "archive"
-#   incremental = Content-addressed storage (deduplication, git-versioned)
+# Default backup mode for new files: "incremental" or "archive"
+#   incremental = Content-addressed storage (deduplication, efficient)
 #   archive = Create timestamped archives (tar.gz, zip, or 7z)
-backup_mode = "incremental"
+default_backup_mode = "incremental"
 
-# Archive format (only used when backup_mode = "archive")
+# Default archive format (used when creating archive backups)
 #   "targz" = tar.gz (default on Linux/macOS)
 #   "zip" = ZIP archive (default on Windows)
-#   "sevenzip" = 7z archive
-archive_format = "targz"
+#   "sevenz" = 7z archive
+default_archive_format = "targz"
+
+# Enable git versioning for project stores (recommended)
+git_enabled = true
+
+# ═══════════════════════════════════════════════════════════════
+# INTERFACE SETTINGS
+# ═══════════════════════════════════════════════════════════════
 
 # Preferred interface when running without arguments
 #   "auto" = Platform default (GUI on Windows, TUI on Linux/macOS)
@@ -39,65 +47,12 @@ archive_format = "targz"
 #   "tui" = Always use TUI
 preferred_interface = "auto"
 
-# Files and patterns to track
-# Use ~ for home directory (works on all platforms)
-# Supports glob patterns: *, **, ?
-#
-# Simple format: just a path string
-# Extended format: { path = "...", mode = "...", encrypted = true/false }
-#
-tracked_files = [
-    # Shell configs
-    "~/.bashrc",
-    "~/.zshrc",
-    "~/.profile",
+# ═══════════════════════════════════════════════════════════════
+# GLOBAL EXCLUDE PATTERNS
+# ═══════════════════════════════════════════════════════════════
 
-    # Git config
-    "~/.gitconfig",
-
-    # SSH config (consider encrypting sensitive files!)
-    "~/.ssh/config",
-    # Encrypt SSH config for extra security:
-    # { path = "~/.ssh/config", encrypted = true },
-
-    # Editor configs
-    "~/.vimrc",
-    "~/.config/nvim/**",
-
-    # Other configs
-    "~/.config/dotmatrix/*",
-
-    # ─────────────────────────────────────────────────────────
-    # ENCRYPTION EXAMPLES
-    # ─────────────────────────────────────────────────────────
-    # Files marked with 'encrypted = true' are encrypted with
-    # a password before being stored in the backup.
-    #
-    # Uses the age-encryption.org standard, compatible with
-    # the 'age' CLI tool for manual decryption if needed.
-    #
-    # TUI/GUI: You'll be prompted for a password
-    # CLI: Use --password-file, --password-stdin, or DOTMATRIX_PASSWORD
-    #
-    # Examples:
-    # { path = "~/.ssh/config", encrypted = true },
-    # { path = "~/.gnupg/**", encrypted = true },
-    # { path = "~/.aws/credentials", encrypted = true },
-    # { path = "~/.kube/config", encrypted = true },
-    # { path = "~/.netrc", encrypted = true },
-
-    # ─────────────────────────────────────────────────────────
-    # PER-PATTERN BACKUP MODE
-    # ─────────────────────────────────────────────────────────
-    # Override the global backup_mode for specific patterns:
-    # { path = "~/.config/large-app/**", mode = "archive" },
-    # { path = "~/.mozilla/firefox/**", mode = "archive" },
-    #
-    # Combine mode and encryption:
-    # { path = "~/.password-store/**", mode = "archive", encrypted = true },
-]
-
-# Patterns to exclude from tracking
+# Patterns to exclude from all projects
+# Use glob syntax: *, **, ?
 exclude = [
     "**/*.log",
     "**/.DS_Store",
@@ -106,10 +61,7 @@ exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
     "**/Thumbs.db",
-    # Exclude private keys (track them separately with encryption if needed)
-    "**/*.pem",
-    "**/id_rsa",
-    "**/id_ed25519",
+    "**/target/**",
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -120,18 +72,18 @@ exclude = [
 # provide the password using one of these methods:
 #
 # 1. Password file (recommended for cron):
-#    dotmatrix backup --password-file ~/.dotmatrix-pass
+#    dmxcli backup --password-file ~/.dotmatrix-pass
 #    Make sure to: chmod 600 ~/.dotmatrix-pass
 #
 # 2. Stdin (good for scripts):
-#    echo "mypassword" | dotmatrix backup --password-stdin
-#    cat ~/.dotmatrix-pass | dotmatrix restore --password-stdin
+#    echo "mypassword" | dmxcli backup --password-stdin
+#    cat ~/.dotmatrix-pass | dmxcli restore --password-stdin
 #
 # 3. Environment variable (fallback):
 #    export DOTMATRIX_PASSWORD="mypassword"
-#    dotmatrix backup
+#    dmxcli backup
 #
 # Priority: stdin > password-file > environment variable
 #
 # Example cron job (daily backup at 2am):
-#   0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Scheduled backup"
+#   0 2 * * * /usr/bin/dmxcli backup --password-file ~/.dotmatrix-pass -m "Scheduled backup"

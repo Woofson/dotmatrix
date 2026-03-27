@@ -374,7 +374,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::Char('?') => app.show_help = true,
-                KeyCode::Char('A') => app.show_about = true,
+                KeyCode::Char('!') => app.show_about = true,
                 KeyCode::Tab => {
                     let next = (app.mode.index() + 1) % 3;
                     app.mode = Mode::from_index(next);
@@ -467,16 +467,13 @@ fn handle_projects_keys(app: &mut App, key: KeyCode) {
         KeyCode::Left | KeyCode::Char('h') => {
             app.collapse_selected_project();
         }
-        KeyCode::Char('b') => {
-            app.backup_project();
-        }
-        KeyCode::Char('B') => {
-            // Backup with custom commit message
+        KeyCode::Char('a') => {
+            // Backup with custom commit message popup
             app.backup_project_with_message();
         }
-        KeyCode::Char('a') => {
-            // Create archive backup (tar.gz/zip)
-            app.backup_project_archive();
+        KeyCode::Char('A') => {
+            // Silent backup (no popup)
+            app.backup_project();
         }
         KeyCode::Char('s') => {
             app.sync_project();

@@ -39,14 +39,14 @@ Or build the TUI directly:
 
 ```bash
 cargo build --release -p dmtui
-cp target/release/dotmatrix-tui ~/.local/bin/
+cp target/release/dmxtui ~/.local/bin/
 ```
 
 ## Quick Start
 
 ```bash
 # Launch the TUI
-dotmatrix-tui
+dmxtui
 ```
 
 In the TUI:
@@ -54,7 +54,7 @@ In the TUI:
 2. Press `Tab` to go to "Add Files"
 3. Navigate to files and press `Enter` to add them
 4. Press `Tab` to return to "Projects"
-5. Press `b` to backup
+5. Press `a` to backup with message (or `A` for silent backup)
 
 ## Configuration
 
@@ -115,6 +115,7 @@ files = [
 |-----|--------|
 | `Tab` / `1-3` | Switch tabs |
 | `?` | Show/hide help |
+| `!` | About dialog |
 | `v` | View file content |
 | `q` | Quit |
 
@@ -134,11 +135,11 @@ files = [
 | `←/h` | Collapse project |
 | `m` | Toggle track mode (Git → Backup → Both) |
 | `x` | Toggle encryption |
-| `b` | Backup project |
-| `B` | Backup with custom message |
+| `a` | Backup with commit message |
+| `A` | Silent backup (no popup) |
 | `s` | Sync project |
 | `n` | New project |
-| `d/Del` | Delete project |
+| `D` | Delete project |
 | `r` | Refresh |
 | `g` | Refresh git status |
 | `G` | Set git remote URL |
@@ -169,39 +170,39 @@ files = [
 ## CLI Commands
 
 ```bash
-# Initialize dotmatrix
-dotmatrix init
+# Initialize Dot Matrix
+dmxcli init
 
 # Project management
-dotmatrix new <name> [-d "description"]
-dotmatrix delete <name> [--force]
-dotmatrix list [-v]
-dotmatrix info <name>
+dmxcli new <name> [-d "description"]
+dmxcli delete <name> [--force]
+dmxcli list [-v]
+dmxcli info <name>
 
 # File management
-dotmatrix add <project> <files...> [-t git|backup|both] [-e]
-dotmatrix remove <project> <files...>
+dmxcli add <project> <files...> [-t git|backup|both] [-e]
+dmxcli remove <project> <files...>
 
 # Status and sync
-dotmatrix status [project] [-c|--changes]
-dotmatrix sync [project]
+dmxcli status [project] [-c|--changes]
+dmxcli sync [project]
 
 # Backup and restore
-dotmatrix backup [project] [-m "message"] [--archive] [--format tar-gz|zip|7z]
-dotmatrix backup [project] --password-file FILE  # For encrypted files
-dotmatrix restore <project> [files...] [--dry-run]
+dmxcli backup [project] [-m "message"] [--archive] [--format tar-gz|zip|7z]
+dmxcli backup [project] --password-file FILE  # For encrypted files
+dmxcli restore <project> [files...] [--dry-run]
 
 # Git operations
-dotmatrix git <project> remote [--set <url>]
-dotmatrix git <project> push
-dotmatrix git <project> pull
-dotmatrix git <project> fetch
-dotmatrix git <project> log [-c 10]
-dotmatrix git <project> status
+dmxcli git <project> remote [--set <url>]
+dmxcli git <project> push
+dmxcli git <project> pull
+dmxcli git <project> fetch
+dmxcli git <project> log [-c 10]
+dmxcli git <project> status
 
 # Archives and store
-dotmatrix archives <project>
-dotmatrix store [project]
+dmxcli archives <project>
+dmxcli store [project]
 
 # Global flag (works with any command)
 --json    Output as JSON for scripting
@@ -259,9 +260,9 @@ manifest + store + git + backup
 
 ### Crates
 - `dmcore` - Core library (all logic)
-- `dmtui` - TUI binary (`dotmatrix-tui`)
-- `dmcli` - CLI binary (`dotmatrix`)
-- `dmgui` - GUI binary (planned, egui)
+- `dmtui` - TUI binary (`dmxtui`)
+- `dmcli` - CLI binary (`dmxcli`)
+- `dmgui` - GUI binary (`dmxgui`)
 
 ## Development
 

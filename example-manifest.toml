@@ -1,0 +1,100 @@
+# Dot Matrix 2.0 - Example Manifest File
+# Copy this file to your config directory:
+#   Linux/macOS: ~/.config/dotmatrix/manifest.toml
+#   Windows: %APPDATA%\dotmatrix\manifest.toml
+#
+# This file defines your projects and tracked files.
+# Each project gets its own git repository and backup store.
+#
+# TUI: Press 'n' to create projects, navigate to Add Files tab to add files
+# CLI: dmxcli new <name>, dmxcli add <project> <files...>
+
+# ═══════════════════════════════════════════════════════════════
+# PROJECT STRUCTURE
+# ═══════════════════════════════════════════════════════════════
+#
+# [projects.<name>]
+# description = "Optional description"
+# remote = "git@github.com:user/repo.git"  # Optional git remote
+# files = [
+#     { path = "~/path/to/file" },
+#     { path = "~/path/to/file", track = "backup" },
+#     { path = "~/path/to/file", track = "both", encrypted = true },
+# ]
+#
+# Track modes:
+#   "git"    - Version controlled (default, good for text files)
+#   "backup" - Incremental backup only (good for binary files)
+#   "both"   - Both git and backup tracking
+
+# ═══════════════════════════════════════════════════════════════
+# EXAMPLE: Shell Configuration
+# ═══════════════════════════════════════════════════════════════
+
+[projects.shell-config]
+description = "Shell configuration files"
+remote = "git@github.com:username/shell-config.git"
+files = [
+    { path = "~/.bashrc" },
+    { path = "~/.zshrc" },
+    { path = "~/.profile" },
+    { path = "~/.bash_aliases" },
+]
+
+# ═══════════════════════════════════════════════════════════════
+# EXAMPLE: Editor Configuration
+# ═══════════════════════════════════════════════════════════════
+
+[projects.nvim-config]
+description = "Neovim configuration"
+remote = "git@github.com:username/nvim-config.git"
+files = [
+    { path = "~/.config/nvim/init.lua" },
+    { path = "~/.config/nvim/lua/plugins.lua" },
+    { path = "~/.config/nvim/lua/keymaps.lua" },
+    { path = "~/.config/nvim/lua/options.lua" },
+]
+
+# ═══════════════════════════════════════════════════════════════
+# EXAMPLE: Sensitive Files (Encrypted)
+# ═══════════════════════════════════════════════════════════════
+#
+# Files marked encrypted = true are encrypted with age before backup.
+# You'll be prompted for a password when backing up or restoring.
+
+[projects.secrets]
+description = "Sensitive configuration (encrypted)"
+files = [
+    { path = "~/.ssh/config", track = "both", encrypted = true },
+    { path = "~/.aws/credentials", track = "backup", encrypted = true },
+    { path = "~/.gnupg/gpg.conf", track = "backup", encrypted = true },
+    { path = "~/.netrc", track = "backup", encrypted = true },
+]
+
+# ═══════════════════════════════════════════════════════════════
+# EXAMPLE: Binary/Large Files
+# ═══════════════════════════════════════════════════════════════
+#
+# Use track = "backup" for binary files that don't diff well in git.
+
+[projects.creative-assets]
+description = "Design and creative project files"
+files = [
+    { path = "~/Documents/designs/logo.svg", track = "git" },
+    { path = "~/Documents/designs/mockup.psd", track = "backup" },
+    { path = "~/Documents/designs/render.blend", track = "backup" },
+]
+
+# ═══════════════════════════════════════════════════════════════
+# EXAMPLE: Mixed Tracking
+# ═══════════════════════════════════════════════════════════════
+#
+# Use track = "both" for files you want in git AND incremental backup.
+
+[projects.dotfiles]
+description = "General dotfiles"
+files = [
+    { path = "~/.gitconfig", track = "both" },
+    { path = "~/.tmux.conf", track = "both" },
+    { path = "~/.config/starship.toml", track = "both" },
+]

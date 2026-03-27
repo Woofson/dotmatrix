@@ -1,16 +1,16 @@
-.TH DOTMATRIX 1 "March 2026" "dotmatrix 2.0.0" "User Commands"
+.TH DMXCLI 1 "March 2026" "Dot Matrix 2.0.1" "User Commands"
 .SH NAME
-dotmatrix \- project compositor with git versioning
+dmxcli \- Dot Matrix project compositor with git versioning
 .SH SYNOPSIS
-.B dotmatrix
+.B dmxcli
 [\fB\-\-json\fR]
 .I command
 [\fIoptions\fR]
 .SH DESCRIPTION
-.B dotmatrix
-is a project compositor that tracks files scattered across your system without moving them.
+.B dmxcli
+is the CLI for Dot Matrix, a project compositor that tracks files scattered across your system without moving them.
 Each project gets its own isolated git repository for independent version history.
-Files stay native to their tools on disk while dotmatrix tracks, versions, and backs them up.
+Files stay native to their tools on disk while Dot Matrix tracks, versions, and backs them up.
 .PP
 Supports per-file encryption using the age standard for sensitive files.
 .PP
@@ -27,13 +27,13 @@ Print help information.
 Print version information.
 .SH COMMANDS
 .SS init
-Initialize dotmatrix configuration and data directories. Creates config file,
+Initialize Dot Matrix configuration and data directories. Creates config file,
 manifest, index, and sets up the data directory structure.
 .PP
 .RS
 .nf
-dotmatrix init
-dotmatrix init --json
+dmxcli init
+dmxcli init --json
 .fi
 .RE
 .SS new \fIname\fR [\fIoptions\fR]
@@ -44,8 +44,8 @@ Project description.
 .PP
 .RS
 .nf
-dotmatrix new myproject
-dotmatrix new myproject -d "My configuration files"
+dmxcli new myproject
+dmxcli new myproject -d "My configuration files"
 .fi
 .RE
 .SS delete \fIname\fR [\fIoptions\fR]
@@ -56,7 +56,7 @@ Skip confirmation prompt.
 .PP
 .RS
 .nf
-dotmatrix delete myproject --force
+dmxcli delete myproject --force
 .fi
 .RE
 .SS list [\fIoptions\fR]
@@ -67,9 +67,9 @@ Show detailed information including file counts and status.
 .PP
 .RS
 .nf
-dotmatrix list
-dotmatrix list -v
-dotmatrix list --json
+dmxcli list
+dmxcli list -v
+dmxcli list --json
 .fi
 .RE
 .SS info \fIproject\fR
@@ -77,8 +77,8 @@ Show detailed information about a project including files, status, and git remot
 .PP
 .RS
 .nf
-dotmatrix info myproject
-dotmatrix info myproject --json
+dmxcli info myproject
+dmxcli info myproject --json
 .fi
 .RE
 .SS add \fIproject\fR \fIfiles\fR... [\fIoptions\fR]
@@ -92,9 +92,9 @@ Mark files as encrypted (requires password for backup/restore).
 .PP
 .RS
 .nf
-dotmatrix add myproject ~/.bashrc ~/.zshrc
-dotmatrix add myproject ~/.ssh/config -t backup -e
-dotmatrix add myproject ~/Documents/notes.md -t both
+dmxcli add myproject ~/.bashrc ~/.zshrc
+dmxcli add myproject ~/.ssh/config -t backup -e
+dmxcli add myproject ~/Documents/notes.md -t both
 .fi
 .RE
 .SS remove \fIproject\fR \fIfiles\fR...
@@ -102,7 +102,7 @@ Remove files from a project. Does not delete the actual files.
 .PP
 .RS
 .nf
-dotmatrix remove myproject ~/.bashrc
+dmxcli remove myproject ~/.bashrc
 .fi
 .RE
 .SS status [\fIproject\fR] [\fIoptions\fR]
@@ -113,10 +113,10 @@ Show only files that need attention (drifted, new, missing).
 .PP
 .RS
 .nf
-dotmatrix status
-dotmatrix status myproject
-dotmatrix status -c
-dotmatrix status --json
+dmxcli status
+dmxcli status myproject
+dmxcli status -c
+dmxcli status --json
 .fi
 .RE
 .PP
@@ -140,8 +140,8 @@ Mark drifted files as synced. Updates the index with current file state.
 .PP
 .RS
 .nf
-dotmatrix sync
-dotmatrix sync myproject
+dmxcli sync
+dmxcli sync myproject
 .fi
 .RE
 .SS backup [\fIproject\fR] [\fIoptions\fR]
@@ -166,11 +166,11 @@ The \fBDOTMATRIX_PASSWORD\fR environment variable can also be used as a fallback
 .PP
 .RS
 .nf
-dotmatrix backup
-dotmatrix backup myproject -m "Updated config"
-dotmatrix backup myproject --archive --format zip
-dotmatrix backup --password-file ~/.dotmatrix-pass
-echo "mypass" | dotmatrix backup --password-stdin
+dmxcli backup
+dmxcli backup myproject -m "Updated config"
+dmxcli backup myproject --archive --format zip
+dmxcli backup --password-file ~/.dotmatrix-pass
+echo "mypass" | dmxcli backup --password-stdin
 .fi
 .RE
 .SS restore \fIproject\fR [\fIfiles\fR...] [\fIoptions\fR]
@@ -187,10 +187,10 @@ Read decryption password from stdin.
 .PP
 .RS
 .nf
-dotmatrix restore myproject
-dotmatrix restore myproject ~/.bashrc
-dotmatrix restore myproject --dry-run
-dotmatrix restore myproject --password-file ~/.dotmatrix-pass
+dmxcli restore myproject
+dmxcli restore myproject ~/.bashrc
+dmxcli restore myproject --dry-run
+dmxcli restore myproject --password-file ~/.dotmatrix-pass
 .fi
 .RE
 .SS git \fIproject\fR \fIaction\fR [\fIoptions\fR]
@@ -218,12 +218,12 @@ Show ahead/behind status relative to remote.
 .PP
 .RS
 .nf
-dotmatrix git myproject remote
-dotmatrix git myproject remote --set git@github.com:user/repo.git
-dotmatrix git myproject push
-dotmatrix git myproject pull
-dotmatrix git myproject log -c 5
-dotmatrix git myproject status
+dmxcli git myproject remote
+dmxcli git myproject remote --set git@github.com:user/repo.git
+dmxcli git myproject push
+dmxcli git myproject pull
+dmxcli git myproject log -c 5
+dmxcli git myproject status
 .fi
 .RE
 .SS archives \fIproject\fR
@@ -231,8 +231,8 @@ List archive backups for a project.
 .PP
 .RS
 .nf
-dotmatrix archives myproject
-dotmatrix archives myproject --json
+dmxcli archives myproject
+dmxcli archives myproject --json
 .fi
 .RE
 .SS store [\fIproject\fR]
@@ -240,9 +240,9 @@ Show store statistics (size, file count). If no project specified, shows all.
 .PP
 .RS
 .nf
-dotmatrix store
-dotmatrix store myproject
-dotmatrix store --json
+dmxcli store
+dmxcli store myproject
+dmxcli store --json
 .fi
 .RE
 .SS tui
@@ -264,7 +264,7 @@ Files can be marked as encrypted when adding to a project:
 .PP
 .RS
 .nf
-dotmatrix add myproject ~/.ssh/config -e
+dmxcli add myproject ~/.ssh/config -e
 .fi
 .RE
 .PP
@@ -276,7 +276,7 @@ Encryption uses the \fBage\fR standard (age-encryption.org).
 Read from stdin. Good for scripts and password managers.
 .RS
 .nf
-pass show dotmatrix | dotmatrix backup --password-stdin
+pass show dotmatrix | dmxcli backup --password-stdin
 .fi
 .RE
 .TP
@@ -284,7 +284,7 @@ pass show dotmatrix | dotmatrix backup --password-stdin
 Read from a file. Good for cron jobs.
 .RS
 .nf
-dotmatrix backup --password-file ~/.dotmatrix-pass
+dmxcli backup --password-file ~/.dotmatrix-pass
 # Restrict permissions:
 chmod 600 ~/.dotmatrix-pass
 .fi
@@ -295,7 +295,7 @@ Fallback option.
 .RS
 .nf
 export DOTMATRIX_PASSWORD="mypassword"
-dotmatrix backup
+dmxcli backup
 .fi
 .RE
 .TP
@@ -306,26 +306,26 @@ If no password provided, prompts interactively.
 .PP
 .RS
 .nf
-# Initialize dotmatrix
-dotmatrix init
+# Initialize Dot Matrix
+dmxcli init
 
 # Create a project
-dotmatrix new shell-config -d "Shell configuration"
+dmxcli new shell-config -d "Shell configuration"
 
 # Add files
-dotmatrix add shell-config ~/.bashrc ~/.zshrc
+dmxcli add shell-config ~/.bashrc ~/.zshrc
 
 # Check status
-dotmatrix status shell-config
+dmxcli status shell-config
 
 # Backup
-dotmatrix backup shell-config -m "Initial backup"
+dmxcli backup shell-config -m "Initial backup"
 
 # Set up git remote
-dotmatrix git shell-config remote --set git@github.com:user/shell-config.git
+dmxcli git shell-config remote --set git@github.com:user/shell-config.git
 
 # Push to remote
-dotmatrix git shell-config push
+dmxcli git shell-config push
 .fi
 .RE
 .SS Encrypted files
@@ -333,13 +333,13 @@ dotmatrix git shell-config push
 .RS
 .nf
 # Add encrypted file
-dotmatrix add secrets ~/.aws/credentials -t backup -e
+dmxcli add secrets ~/.aws/credentials -t backup -e
 
 # Backup with password
-dotmatrix backup secrets --password-file ~/.dotmatrix-pass
+dmxcli backup secrets --password-file ~/.dotmatrix-pass
 
 # Restore
-dotmatrix restore secrets --password-file ~/.dotmatrix-pass
+dmxcli restore secrets --password-file ~/.dotmatrix-pass
 .fi
 .RE
 .SS Archive backups
@@ -347,13 +347,13 @@ dotmatrix restore secrets --password-file ~/.dotmatrix-pass
 .RS
 .nf
 # Create tar.gz archive
-dotmatrix backup myproject --archive
+dmxcli backup myproject --archive
 
 # Create zip archive
-dotmatrix backup myproject --archive --format zip
+dmxcli backup myproject --archive --format zip
 
 # List archives
-dotmatrix archives myproject
+dmxcli archives myproject
 .fi
 .RE
 .SS Scripting with JSON output
@@ -361,14 +361,14 @@ dotmatrix archives myproject
 .RS
 .nf
 # Get project list as JSON
-dotmatrix list --json | jq '.projects[].name'
+dmxcli list --json | jq '.projects[].name'
 
 # Check if any files need backup
-dotmatrix status --json | jq '.projects[].drifted'
+dmxcli status --json | jq '.projects[].drifted'
 
 # Automated backup script
-if [ "$(dotmatrix status --json | jq '.projects[0].drifted')" -gt 0 ]; then
-    dotmatrix backup
+if [ "$(dmxcli status --json | jq '.projects[0].drifted')" -gt 0 ]; then
+    dmxcli backup
 fi
 .fi
 .RE
@@ -381,7 +381,7 @@ echo "your-secure-password" > ~/.dotmatrix-pass
 chmod 600 ~/.dotmatrix-pass
 
 # Add to crontab (crontab -e)
-0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Daily backup"
+0 2 * * * /usr/bin/dmxcli backup --password-file ~/.dotmatrix-pass -m "Daily backup"
 .fi
 .RE
 .SH FILES
