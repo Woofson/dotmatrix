@@ -1,25 +1,24 @@
-.TH DOTMATRIX 1 "March 2026" "dotmatrix 0.5.1" "User Commands"
+.TH DOTMATRIX 1 "March 2026" "dotmatrix 2.0.0" "User Commands"
 .SH NAME
-dotmatrix \- dotfile management and versioning tool
+dotmatrix \- project compositor with git versioning
 .SH SYNOPSIS
 .B dotmatrix
-[\fB\-v\fR|\fB\-\-verbose\fR]
+[\fB\-\-json\fR]
 .I command
 [\fIoptions\fR]
 .SH DESCRIPTION
 .B dotmatrix
-is a cross-platform dotfile management tool that indexes configuration files where they live,
-without using symlinks. It provides version control through git integration
-and supports two backup modes: incremental (content-addressed) and archive (tarballs).
+is a project compositor that tracks files scattered across your system without moving them.
+Each project gets its own isolated git repository for independent version history.
+Files stay native to their tools on disk while dotmatrix tracks, versions, and backs them up.
 .PP
-Supports per-file encryption using the age standard for sensitive files like SSH configs
-and credentials.
+Supports per-file encryption using the age standard for sensitive files.
 .PP
 Works on Linux, macOS, and Windows.
 .SH GLOBAL OPTIONS
 .TP
-.BR \-v ", " \-\-verbose
-Increase verbosity. Use \fB\-v\fR for verbose output, \fB\-vv\fR for debug output.
+.BR \-\-json
+Output results in JSON format for scripting and automation.
 .TP
 .BR \-h ", " \-\-help
 Print help information.
@@ -28,285 +27,265 @@ Print help information.
 Print version information.
 .SH COMMANDS
 .SS init
-Initialize dotmatrix configuration and storage directories. Creates config file,
-index, and git repository. Prompts for git identity if not configured globally.
-.SS add [\fIoptions\fR] \fIpatterns\fR...
-Add file patterns to the tracking list.
-.TP
-.BR \-r ", " \-\-recursive
-Recursively add all files in directories, respecting .gitignore files.
-.TP
-.BR \-e ", " \-\-exclude " " \fIpattern\fR
-Exclude files matching pattern (can be specified multiple times).
-.TP
-.BR \-\-max\-depth " " \fIdepth\fR
-Maximum directory depth for recursive scanning.
-.TP
-.BR \-\-dry\-run
-Show what would be added without making changes.
+Initialize dotmatrix configuration and data directories. Creates config file,
+manifest, index, and sets up the data directory structure.
 .PP
 .RS
 .nf
-dotmatrix add ~/.bashrc
-dotmatrix add ~/.config/nvim/**
-dotmatrix add /etc/nginx/nginx.conf
-
-# Recursive add (respects .gitignore)
-dotmatrix add -r ~/.config/nvim
-dotmatrix add -r ~/dotfiles --exclude "*.cache"
-dotmatrix add -r ~/.config --max-depth 2 --dry-run
+dotmatrix init
+dotmatrix init --json
 .fi
 .RE
-.SS remove \fIpatterns\fR...
-Remove file patterns from the tracking list.
-.SS scan [\fB\-\-yes\fR]
-Scan all tracked files and update the index with current metadata (hash, size, mtime).
+.SS new \fIname\fR [\fIoptions\fR]
+Create a new project with optional description.
 .TP
-.BR \-y ", " \-\-yes
-Auto-confirm cleanup of orphaned entries.
-.SS backup [\fIoptions\fR]
-Backup tracked files to storage. Uses incremental or archive mode based on config.
+.BR \-d ", " \-\-description " " \fItext\fR
+Project description.
+.PP
+.RS
+.nf
+dotmatrix new myproject
+dotmatrix new myproject -d "My configuration files"
+.fi
+.RE
+.SS delete \fIname\fR [\fIoptions\fR]
+Delete a project from the manifest. Does not delete the actual tracked files.
 .TP
-.BR \-m ", " \-\-message " " \fImessage\fR
-Commit message for git (if enabled).
+.BR \-f ", " \-\-force
+Skip confirmation prompt.
+.PP
+.RS
+.nf
+dotmatrix delete myproject --force
+.fi
+.RE
+.SS list [\fIoptions\fR]
+List all projects.
+.TP
+.BR \-v ", " \-\-verbose
+Show detailed information including file counts and status.
+.PP
+.RS
+.nf
+dotmatrix list
+dotmatrix list -v
+dotmatrix list --json
+.fi
+.RE
+.SS info \fIproject\fR
+Show detailed information about a project including files, status, and git remote.
+.PP
+.RS
+.nf
+dotmatrix info myproject
+dotmatrix info myproject --json
+.fi
+.RE
+.SS add \fIproject\fR \fIfiles\fR... [\fIoptions\fR]
+Add files to a project.
+.TP
+.BR \-t ", " \-\-track " " \fImode\fR
+Track mode: git, backup, or both. Default: git.
+.TP
+.BR \-e ", " \-\-encrypted
+Mark files as encrypted (requires password for backup/restore).
+.PP
+.RS
+.nf
+dotmatrix add myproject ~/.bashrc ~/.zshrc
+dotmatrix add myproject ~/.ssh/config -t backup -e
+dotmatrix add myproject ~/Documents/notes.md -t both
+.fi
+.RE
+.SS remove \fIproject\fR \fIfiles\fR...
+Remove files from a project. Does not delete the actual files.
+.PP
+.RS
+.nf
+dotmatrix remove myproject ~/.bashrc
+.fi
+.RE
+.SS status [\fIproject\fR] [\fIoptions\fR]
+Show status of tracked files. If no project specified, shows all projects.
+.TP
+.BR \-c ", " \-\-changes
+Show only files that need attention (drifted, new, missing).
+.PP
+.RS
+.nf
+dotmatrix status
+dotmatrix status myproject
+dotmatrix status -c
+dotmatrix status --json
+.fi
+.RE
+.PP
+Status symbols:
+.RS
+.TP
+.B \[u2713]
+Synced - file matches last known state
+.TP
+.B \[u26A0]
+Drifted - file changed since last sync
+.TP
+.B +
+New - file never synced
+.TP
+.B \[u2717]
+Missing - file removed from disk
+.RE
+.SS sync [\fIproject\fR]
+Mark drifted files as synced. Updates the index with current file state.
+.PP
+.RS
+.nf
+dotmatrix sync
+dotmatrix sync myproject
+.fi
+.RE
+.SS backup [\fIproject\fR] [\fIoptions\fR]
+Backup project files to content-addressed store with git versioning.
+.TP
+.BR \-m ", " \-\-message " " \fItext\fR
+Custom commit message for the backup.
+.TP
+.BR \-a ", " \-\-archive
+Create an archive backup (tar.gz/zip) instead of incremental.
+.TP
+.BR \-\-format " " \fIformat\fR
+Archive format: tar-gz, zip, seven-z. Default: tar-gz.
 .TP
 .BR \-\-password\-file " " \fIFILE\fR
 Read encryption password from file. Required for encrypted files in non-interactive mode.
 .TP
 .BR \-\-password\-stdin
-Read encryption password from stdin. Useful for piping from password managers or scripts.
+Read encryption password from stdin. Useful for piping from password managers.
 .PP
 The \fBDOTMATRIX_PASSWORD\fR environment variable can also be used as a fallback.
 .PP
 .RS
 .nf
-# Basic backup
-dotmatrix backup -m "Updated shell config"
-
-# With password for encrypted files
+dotmatrix backup
+dotmatrix backup myproject -m "Updated config"
+dotmatrix backup myproject --archive --format zip
 dotmatrix backup --password-file ~/.dotmatrix-pass
 echo "mypass" | dotmatrix backup --password-stdin
-DOTMATRIX_PASSWORD=secret dotmatrix backup
 .fi
 .RE
-.SS restore [\fIoptions\fR]
-Restore files from backup. Shows comparison view and requires confirmation.
+.SS restore \fIproject\fR [\fIfiles\fR...] [\fIoptions\fR]
+Restore files from the backup store.
 .TP
 .BR \-\-dry\-run
 Show what would be restored without making changes.
 .TP
-.BR \-\-diff
-Show file differences for each file.
-.TP
-.BR \-y ", " \-\-yes
-Auto-confirm restore (still creates safety backup).
-.TP
-.BR \-f ", " \-\-file " " \fIpattern\fR
-Restore only files matching pattern.
-.TP
-.BR \-c ", " \-\-commit " " \fIhash\fR
-Restore from specific git commit.
-.TP
 .BR \-\-password\-file " " \fIFILE\fR
-Read decryption password from file. Required for encrypted files in non-interactive mode.
+Read decryption password from file.
 .TP
 .BR \-\-password\-stdin
 Read decryption password from stdin.
-.SS status [\fIoptions\fR]
-Show status of tracked files compared to last backup.
-.TP
-.BR \-a ", " \-\-all
-Show all files including unchanged.
-.TP
-.BR \-q ", " \-\-quick
-Quick mode: compare by size/mtime only (skip hash calculation).
-.TP
-.BR \-\-json
-Output in JSON format for scripting.
-.SS list
-List all tracked file patterns and exclude patterns.
-.SS tui
-Launch interactive terminal user interface with three tabs:
-.TP
-.B Tracked Files
-View your backed-up files and their status. Press \fBb\fR to run a backup.
-.TP
-.B Add Files
-Browse your computer to add files to tracking.
-.TP
-.B Restore
-Browse backup history and restore files from previous backups.
-.PP
-.B Key bindings:
-.RS
-.TP
-.B j/k, Up/Down
-Navigate file list
-.TP
-.B Tab
-Switch between tabs
-.TP
-.B v
-View file contents with syntax highlighting (works in all tabs)
-.TP
-.B b
-Run backup (Tracked Files tab)
-.TP
-.B p
-Pull from git remote (Tracked Files tab)
-.TP
-.B P
-Push to git remote (Tracked Files tab)
-.TP
-.B U
-Set git remote URL (Tracked Files tab)
-.TP
-.B Right/l
-Expand folder (Tracked Files) / Enter directory (Add Files)
-.TP
-.B Left/h
-Collapse folder (Tracked Files) / Parent directory (Add Files)
-.TP
-.B Enter
-Add file / Select backup / Restore file(s)
-.TP
-.B ~
-Go to home directory (Add Files tab)
-.TP
-.B A
-Add folder as pattern with /** suffix (Add Files tab)
-.TP
-.B R
-Recursive add - preview and select individual files (Add Files tab)
-.TP
-.B Space
-Select multiple items
-.TP
-.B a
-Type a path manually
-.TP
-.B Ctrl+A
-Select/deselect all (in recursive preview)
-.TP
-.B d
-Stop tracking file
-.TP
-.B X
-Toggle encryption for file (shows [E] indicator)
-.TP
-.B M
-Toggle backup mode (Incremental [I] / Archive [A])
-.TP
-.B S
-Save config and reload without quitting
-.TP
-.B ?
-Show help
-.TP
-.B q
-Quit (saves changes)
-.RE
-.PP
-.B File viewer bindings (when viewing a file):
-.RS
-.TP
-.B j/k, Up/Down
-Scroll up/down
-.TP
-.B PgUp/PgDn
-Page up/down
-.TP
-.B g/Home
-Go to top
-.TP
-.B G/End
-Go to bottom
-.TP
-.B q/Esc
-Close viewer
-.RE
-.PP
-.B Status symbols (Tracked Files tab):
-.RS
-.TP
-.B " " (space)
-Backed up and unchanged
-.TP
-.B M
-Modified since last backup
-.TP
-.B +
-New, not yet backed up
-.TP
-.B \-
-Deleted from your system
-.RE
-.PP
-.B Restore symbols:
-.RS
-.TP
-.B NEW
-File missing locally
-.TP
-.B CHG
-Local file differs from backup
-.TP
-.B OK
-Matches backup
-.RE
-.PP
-.B File indicators:
-.RS
-.TP
-.B [I]
-Incremental backup mode (content-addressed, deduped)
-.TP
-.B [A]
-Archive backup mode (compressed tarball)
-.TP
-.B [E]
-Encrypted (requires password for backup/restore)
-.RE
-.SS gui
-Launch native graphical user interface. Same features as TUI with mouse support.
-.PP
-On Windows, use \fBdmgui.exe\fR for a console-free experience.
-.SH ENCRYPTION
-Files can be encrypted before backup by adding \fBencrypted = true\fR to the pattern:
 .PP
 .RS
 .nf
-tracked_files = [
-    "~/.bashrc",
-    { path = "~/.ssh/config", encrypted = true },
-    { path = "~/.aws/credentials", encrypted = true },
-    { path = "~/.gnupg/**", encrypted = true },
-]
+dotmatrix restore myproject
+dotmatrix restore myproject ~/.bashrc
+dotmatrix restore myproject --dry-run
+dotmatrix restore myproject --password-file ~/.dotmatrix-pass
+.fi
+.RE
+.SS git \fIproject\fR \fIaction\fR [\fIoptions\fR]
+Git operations for a project's repository.
+.PP
+.B Actions:
+.TP
+.B remote [\-\-set \fIurl\fR]
+Show or set the git remote URL.
+.TP
+.B push
+Push commits to remote.
+.TP
+.B pull
+Pull from remote.
+.TP
+.B fetch
+Fetch from remote without merging.
+.TP
+.B log [\-c \fIcount\fR]
+Show recent commits. Default: 10.
+.TP
+.B status
+Show ahead/behind status relative to remote.
+.PP
+.RS
+.nf
+dotmatrix git myproject remote
+dotmatrix git myproject remote --set git@github.com:user/repo.git
+dotmatrix git myproject push
+dotmatrix git myproject pull
+dotmatrix git myproject log -c 5
+dotmatrix git myproject status
+.fi
+.RE
+.SS archives \fIproject\fR
+List archive backups for a project.
+.PP
+.RS
+.nf
+dotmatrix archives myproject
+dotmatrix archives myproject --json
+.fi
+.RE
+.SS store [\fIproject\fR]
+Show store statistics (size, file count). If no project specified, shows all.
+.PP
+.RS
+.nf
+dotmatrix store
+dotmatrix store myproject
+dotmatrix store --json
+.fi
+.RE
+.SS tui
+Launch the terminal user interface.
+.SS gui
+Launch the graphical user interface.
+.SH TRACK MODES
+.TP
+.B git
+Version controlled, diffable, shareable. Good for text files.
+.TP
+.B backup
+Incremental content-addressed storage. Good for binary files.
+.TP
+.B both
+Track via both git and backup.
+.SH ENCRYPTION
+Files can be marked as encrypted when adding to a project:
+.PP
+.RS
+.nf
+dotmatrix add myproject ~/.ssh/config -e
 .fi
 .RE
 .PP
-Encryption uses the \fBage\fR standard (age-encryption.org), making backups compatible
-with the \fBage\fR CLI tool for manual decryption if needed.
-.SS Interactive Mode (TUI/GUI)
-You will be prompted for a password when backing up or restoring encrypted files.
-.SS Non-Interactive Mode (CLI/Scripts/Cron)
-Provide the password using one of these methods (in priority order):
+Encrypted files require a password for backup and restore operations.
+Encryption uses the \fBage\fR standard (age-encryption.org).
+.SS Password Methods (priority order)
 .TP
 .B 1. --password-stdin
 Read from stdin. Good for scripts and password managers.
 .RS
 .nf
-echo "mypassword" | dotmatrix backup --password-stdin
 pass show dotmatrix | dotmatrix backup --password-stdin
 .fi
 .RE
 .TP
 .B 2. --password-file FILE
-Read from a file. Recommended for cron jobs.
+Read from a file. Good for cron jobs.
 .RS
 .nf
 dotmatrix backup --password-file ~/.dotmatrix-pass
-# Make sure to restrict permissions:
+# Restrict permissions:
 chmod 600 ~/.dotmatrix-pass
 .fi
 .RE
@@ -319,180 +298,81 @@ export DOTMATRIX_PASSWORD="mypassword"
 dotmatrix backup
 .fi
 .RE
-.SS Example Cron Job
-.PP
-.RS
-.nf
-# Daily backup at 2am
-0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Scheduled backup"
-.fi
-.RE
-.SH GIT SYNC
-Backups can be synced to a remote git repository using push/pull.
-.SS Configuration
-Add \fBgit_remote_url\fR to your config.toml:
-.PP
-.RS
-.nf
-git_remote_url = "https://github.com/user/dotfiles.git"
-# or
-git_remote_url = "git@github.com:user/dotfiles.git"
-.fi
-.RE
-.SS TUI Key Bindings
 .TP
-.B p
-Pull from remote
-.TP
-.B P
-Push to remote
-.TP
-.B U
-Set or change remote URL
-.SS GUI
-Use the Pull/Push buttons in the status bar. If no remote is configured,
-a "Set Remote..." button appears instead.
-.SH CONFIGURATION
-Configuration is stored in the config directory (see FILES section):
-.PP
-.RS
-.nf
-# Optional: Custom backup location
-# data_dir = "~/Dropbox/dotmatrix"
-
-# Git remote for sync
-# git_remote_url = "https://github.com/user/dotfiles.git"
-
-git_enabled = true
-backup_mode = "incremental"  # or "archive"
-
-tracked_files = [
-    "~/.bashrc",
-    "~/.config/nvim/**",
-    "~/.config/dotmatrix/*",
-    # Encrypted files
-    { path = "~/.ssh/config", encrypted = true },
-]
-
-exclude = [
-    "**/*.log",
-    "**/node_modules/**",
-]
-.fi
-.RE
-.SS BACKUP MODES
-.TP
-.B incremental
-Files are stored by SHA256 hash in content-addressed storage.
-Provides automatic deduplication. Best for frequent backups.
-.TP
-.B archive
-Files are stored as compressed tarballs with timestamps.
-Best for occasional snapshots.
-.SH FILES
-Default paths vary by platform:
-.SS Linux
-.TP
-.I ~/.config/dotmatrix/config.toml
-Configuration file.
-.TP
-.I ~/.local/share/dotmatrix/
-Data directory (index, storage, archives, git).
-.SS macOS
-.TP
-.I ~/Library/Application Support/dotmatrix/config.toml
-Configuration file.
-.TP
-.I ~/Library/Application Support/dotmatrix/
-Data directory.
-.SS Windows
-.TP
-.I %APPDATA%\\dotmatrix\\config.toml
-Configuration file.
-.TP
-.I %LOCALAPPDATA%\\dotmatrix\\
-Data directory.
-.SS Data Directory Contents
-.TP
-.I index.json
-File metadata index.
-.TP
-.I storage/
-Content-addressed backup storage (incremental mode).
-.TP
-.I archives/
-Tarball backup storage (archive mode).
-.TP
-.I README.md
-Auto-generated backup summary with commit history.
-.TP
-.I .git/
-Git repository for version control.
-.SS Other
-.TP
-.I ~/.local/share/dotmatrix/restore-backups/
-Safety backups created before restore operations.
-.TP
-.I ~/.dotmatrix-pass
-Suggested location for password file (remember to chmod 600).
-.SH PATTERN MATCHING
-.B dotmatrix
-supports glob patterns for file matching:
-.PP
-.RS
-.nf
-~/.bashrc              # Single file
-~/.config/*            # All files in directory
-~/.config/**           # All files recursively
-~/.config/**/*.lua     # All .lua files recursively
-.fi
-.RE
-.PP
-The \fB~\fR prefix expands to the user's home directory on all platforms.
+.B 4. Interactive prompt
+If no password provided, prompts interactively.
 .SH EXAMPLES
 .SS Basic workflow
 .PP
 .RS
 .nf
-# Initialize
+# Initialize dotmatrix
 dotmatrix init
 
-# Add files to track
-dotmatrix add ~/.bashrc ~/.zshrc
+# Create a project
+dotmatrix new shell-config -d "Shell configuration"
 
-# Scan to index files
-dotmatrix scan
-
-# Create backup
-dotmatrix backup -m "Initial backup"
+# Add files
+dotmatrix add shell-config ~/.bashrc ~/.zshrc
 
 # Check status
-dotmatrix status
+dotmatrix status shell-config
 
-# Restore (interactive)
-dotmatrix restore
+# Backup
+dotmatrix backup shell-config -m "Initial backup"
+
+# Set up git remote
+dotmatrix git shell-config remote --set git@github.com:user/shell-config.git
+
+# Push to remote
+dotmatrix git shell-config push
 .fi
 .RE
 .SS Encrypted files
 .PP
 .RS
 .nf
-# In config.toml:
-tracked_files = [
-    { path = "~/.ssh/config", encrypted = true },
-]
+# Add encrypted file
+dotmatrix add secrets ~/.aws/credentials -t backup -e
 
-# Interactive backup (prompts for password)
-dotmatrix tui
+# Backup with password
+dotmatrix backup secrets --password-file ~/.dotmatrix-pass
 
-# Scripted backup with password file
-dotmatrix backup --password-file ~/.dotmatrix-pass
-
-# Restore encrypted files
-dotmatrix restore --password-file ~/.dotmatrix-pass
+# Restore
+dotmatrix restore secrets --password-file ~/.dotmatrix-pass
 .fi
 .RE
-.SS Automated backups with cron
+.SS Archive backups
+.PP
+.RS
+.nf
+# Create tar.gz archive
+dotmatrix backup myproject --archive
+
+# Create zip archive
+dotmatrix backup myproject --archive --format zip
+
+# List archives
+dotmatrix archives myproject
+.fi
+.RE
+.SS Scripting with JSON output
+.PP
+.RS
+.nf
+# Get project list as JSON
+dotmatrix list --json | jq '.projects[].name'
+
+# Check if any files need backup
+dotmatrix status --json | jq '.projects[].drifted'
+
+# Automated backup script
+if [ "$(dotmatrix status --json | jq '.projects[0].drifted')" -gt 0 ]; then
+    dotmatrix backup
+fi
+.fi
+.RE
+.SS Cron job
 .PP
 .RS
 .nf
@@ -504,46 +384,43 @@ chmod 600 ~/.dotmatrix-pass
 0 2 * * * /usr/bin/dotmatrix backup --password-file ~/.dotmatrix-pass -m "Daily backup"
 .fi
 .RE
-.SS Preview restore changes
+.SH FILES
+.SS Linux
+.TP
+.I ~/.config/dotmatrix/config.toml
+Configuration file.
+.TP
+.I ~/.config/dotmatrix/manifest.toml
+Project manifest defining tracked files.
+.TP
+.I ~/.local/share/dotmatrix/projects/
+Per-project data directories.
+.TP
+.I ~/.local/share/dotmatrix/backups/
+Archive backup storage.
+.SS macOS
+.TP
+.I ~/Library/Application Support/dotmatrix/
+Configuration and data directory.
+.SS Windows
+.TP
+.I %APPDATA%\\dotmatrix\\
+Configuration directory.
+.TP
+.I %LOCALAPPDATA%\\dotmatrix\\
+Data directory.
+.SS Per-Project Structure
 .PP
-.RS
-.nf
-dotmatrix restore --dry-run --diff
-.fi
-.RE
-.SS Custom backup location
-.PP
-.RS
-.nf
-# In config.toml:
-data_dir = "D:/Backups/dotmatrix"  # Windows
-data_dir = "~/Dropbox/dotmatrix"   # Sync via cloud
-.fi
-.RE
-.SS Git sync
-.PP
-.RS
-.nf
-# In config.toml:
-git_remote_url = "git@github.com:user/dotfiles.git"
-
-# Or set via TUI (press U)
-
-# Push backups to remote
-dotmatrix tui  # then press P
-
-# Pull from remote (e.g., on new machine)
-dotmatrix tui  # then press p
-.fi
-.RE
-.SS Verbose output
-.PP
-.RS
-.nf
-dotmatrix -v backup
-dotmatrix -vv status
-.fi
-.RE
+Each project in \fI~/.local/share/dotmatrix/projects/<name>/\fR contains:
+.TP
+.I .git/
+Project-specific git repository.
+.TP
+.I store/
+Content-addressed file storage.
+.TP
+.I index.json
+File tracking index with hashes and metadata.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -553,7 +430,6 @@ Success.
 Error occurred.
 .SH SEE ALSO
 .BR git (1),
-.BR rsync (1),
 .BR age (1)
 .SH BUGS
 Report bugs at: https://github.com/Woofson/dotmatrix/issues

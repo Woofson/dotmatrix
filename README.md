@@ -166,6 +166,47 @@ files = [
 | `←/h/Bksp` | Back to commits |
 | `r` | Refresh |
 
+## CLI Commands
+
+```bash
+# Initialize dotmatrix
+dotmatrix init
+
+# Project management
+dotmatrix new <name> [-d "description"]
+dotmatrix delete <name> [--force]
+dotmatrix list [-v]
+dotmatrix info <name>
+
+# File management
+dotmatrix add <project> <files...> [-t git|backup|both] [-e]
+dotmatrix remove <project> <files...>
+
+# Status and sync
+dotmatrix status [project] [-c|--changes]
+dotmatrix sync [project]
+
+# Backup and restore
+dotmatrix backup [project] [-m "message"] [--archive] [--format tar-gz|zip|7z]
+dotmatrix backup [project] --password-file FILE  # For encrypted files
+dotmatrix restore <project> [files...] [--dry-run]
+
+# Git operations
+dotmatrix git <project> remote [--set <url>]
+dotmatrix git <project> push
+dotmatrix git <project> pull
+dotmatrix git <project> fetch
+dotmatrix git <project> log [-c 10]
+dotmatrix git <project> status
+
+# Archives and store
+dotmatrix archives <project>
+dotmatrix store [project]
+
+# Global flag (works with any command)
+--json    Output as JSON for scripting
+```
+
 ## Status Indicators
 
 ### File Status
@@ -218,8 +259,8 @@ manifest + store + git + backup
 
 ### Crates
 - `dmcore` - Core library (all logic)
-- `dmtui` - TUI binary (ratatui)
-- `dmcli` - CLI binary (planned)
+- `dmtui` - TUI binary (`dotmatrix-tui`)
+- `dmcli` - CLI binary (`dotmatrix`)
 - `dmgui` - GUI binary (planned, egui)
 
 ## Development
